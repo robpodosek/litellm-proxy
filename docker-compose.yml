@@ -10,7 +10,6 @@ services:
         required: false
     environment:
       - GEMINI_API_KEY
-      - GITHUB_TOKEN
       - GROQ_API_KEY
       - NVIDIA_NIM_API_KEY
       - OPENROUTER_API_KEY

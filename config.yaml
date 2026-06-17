@@ -2,44 +2,48 @@ general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 
 model_list:
-  # Tier 1: The Heavyweight Agents (Frontier Free Tiers)
-  - model_name: gemini-pro
-    litellm_params:
-      model: gemini/gemini-pro-latest
-      api_key: os.environ/GEMINI_API_KEY
-  - model_name: gpt-4o
-    litellm_params:
-      model: github/gpt-4o
-      api_key: os.environ/GITHUB_TOKEN
-  - model_name: llama-405b
-    litellm_params:
-      model: github/Meta-Llama-3.1-405B-Instruct
-      api_key: os.environ/GITHUB_TOKEN
-
-  # Tier 2: Managed OSS (High Performance)
-  - model_name: groq-llama-70b
-    litellm_params:
-      model: groq/llama-3.3-70b-versatile
-      api_key: os.environ/GROQ_API_KEY
-  - model_name: nvidia-deepseek
-    litellm_params:
-      model: nvidia_nim/deepseek-ai/deepseek-v4-flash
-      api_key: os.environ/NVIDIA_NIM_API_KEY
-
-  # Tier 3: Fast/High-Volume Fallback
+  # Tier 1: Google AI Studio (Free Tier — no billing account required)
   - model_name: gemini-flash
     litellm_params:
-      model: gemini/gemini-flash-latest
+      model: gemini/gemini-3-flash
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GEMINI_API_KEY
 
-  # Tier 4: Aggregator Free Models
-  - model_name: openrouter-llama
+  # Tier 2: Managed OSS — Ultra-Low Latency (Groq LPU)
+  - model_name: groq-maverick
     litellm_params:
-      model: openrouter/meta-llama/llama-3.3-70b-instruct:free
+      model: groq/meta-llama/llama-4-maverick-17b-128e-instruct
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: groq-qwen
+    litellm_params:
+      model: groq/qwen/qwen3-32b
+      api_key: os.environ/GROQ_API_KEY
+
+  # Tier 3: NVIDIA NIM — Free Prototyping Endpoints
+  - model_name: nvidia-kimi
+    litellm_params:
+      model: nvidia_nim/moonshotai/kimi-k2.6
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  - model_name: nvidia-deepseek
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+  # Tier 4: OpenRouter — Subsidized Free Models (:free suffix)
+  - model_name: openrouter-qwen-coder
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder:free
       api_key: os.environ/OPENROUTER_API_KEY
-  - model_name: openrouter-qwen
+  - model_name: openrouter-deepseek
     litellm_params:
-      model: openrouter/qwen/qwen3-next-80b-a3b-instruct:free
+      model: openrouter/deepseek/deepseek-v4-flash:free
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: openrouter-gemma
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it:free
       api_key: os.environ/OPENROUTER_API_KEY
 
   # Tier 5: Local CPU Survival
@@ -49,8 +53,8 @@ model_list:
       api_base: http://localhost:11434
 
 router_settings:
-  # When the primary model (gemini-pro) hits a rate limit (429), it cascades down this list.
-  fallbacks: [{"gemini-pro": ["gpt-4o", "groq-llama-70b", "llama-405b", "nvidia-deepseek", "gemini-flash", "openrouter-qwen", "openrouter-llama", "local-cpu-survival"]}]
+  # When the primary model (gemini-flash) hits a rate limit (429), it cascades down this list.
+  fallbacks: [{"gemini-flash": ["groq-maverick", "nvidia-kimi", "groq-qwen", "nvidia-deepseek", "gemini-flash-lite", "openrouter-qwen-coder", "openrouter-deepseek", "openrouter-gemma", "local-cpu-survival"]}]
   routing_strategy: least-busy
 
 litellm_settings:

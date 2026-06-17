@@ -8,4 +8,5 @@ dependencies = [
     "litellm[proxy]>=1.52.0",
     "google-generativeai",
     "python-dotenv",
+    "ipython>=9.13.0",
 ]
