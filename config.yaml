@@ -41,10 +41,9 @@ model_list:
       api_key: os.environ/NVIDIA_NIM_API_KEY
 
   # Tier 4: OpenRouter — Subsidized Free Models (:free suffix)
-  # Note: free model roster changes frequently — verify at openrouter.ai/models
-  - model_name: openrouter-gpt-oss
+  - model_name: openrouter-free
     litellm_params:
-      model: openrouter/openai/gpt-oss-120b:free  # Top free coding model
+      model: openrouter/openrouter/free
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: openrouter-deepseek-r1
