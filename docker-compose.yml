@@ -1,7 +1,7 @@
 services:
   proxy:
     build: .
-    container_name: free-frontier-proxy
+    container_name: free-frontier
     restart: unless-stopped
     ports:
       - "4000:4000"

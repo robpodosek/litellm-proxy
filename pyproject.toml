@@ -1,5 +1,5 @@
 [project]
-name = "free-frontier-proxy"
+name = "free-frontier"
 version = "0.1.0"
 description = "High-availability LiteLLM Proxy optimized for free-tier frontier models with automatic fallbacks."
 readme = "README.md"

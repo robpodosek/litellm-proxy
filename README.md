@@ -1,4 +1,4 @@
-# Free Frontier Proxy
+# Free Frontier
 
 This project provides a robust, resilient proxy that enables free access to frontier-class AI models. 
 
@@ -22,7 +22,7 @@ API costs can scale rapidly in AI application development. This proxy mitigates 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/robpodosek/free-frontier-proxy.git
+   git clone https://github.com/robpodosek/free-frontier.git
    cd free-frontier-proxy
    ```
 

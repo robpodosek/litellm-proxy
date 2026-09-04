@@ -612,7 +612,7 @@ wheels = [
 ]
 
 [[package]]
-name = "free-frontier-proxy"
+name = "free-frontier"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
