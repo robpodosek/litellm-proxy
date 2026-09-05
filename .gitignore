@@ -1,21 +1,27 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.egg-info/
 build/
 dist/
-wheels/
-*.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
-.venv
+.venv/
 
-# Environment variables
+# Secrets / local environment
 .env
-.envrc
 
-# Local state & logs
+# Local editor / tooling
+.vscode/
+.idea/
+
+# Runtime state and logs (future phases)
 *.log
+*.pid
+state/
 stats.json
 
-# Scratch & test scripts
+# Scratch
 scratch/

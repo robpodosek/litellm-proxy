@@ -1,12 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "free-frontier"
-version = "0.1.0"
-description = "High-availability LiteLLM Proxy optimized for free-tier frontier models with automatic fallbacks."
+version = "0.1.0a0"
+description = "OpenAI-compatible free-tier LLM routing proxy with transparent fallback."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "litellm[proxy]>=1.52.0",
-    "google-generativeai",
-    "python-dotenv",
-    "ipython>=9.13.0",
+license = { file = "LICENSE" }
+authors = [
+  { name = "Robert Podosek" },
 ]
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
