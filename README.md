@@ -59,7 +59,7 @@ free-tier exhaustion into billable usage, the upstream provider may still charge
 For strict zero-cost operation, configure provider accounts/projects so paid overages are
 disabled or otherwise impossible where the provider supports that option.
 
-## Phase 3: agent-compatible routing
+## Capability-aware routing
 
 Phase 3 adds capability-aware routing and OpenAI-compatible streaming/tool behavior on top of
 Phase 2 fallback and cooldowns.
@@ -88,6 +88,40 @@ chunk is emitted**.
 Once the first chunk has committed the response to a physical route, Free Frontier never
 splices the remainder of the answer from another model. A post-commit upstream stream failure
 terminates that stream instead of mixing model outputs.
+
+## Phase 4: headless observability
+
+Free Frontier exposes read-only machine-readable status without requiring a terminal UI:
+
+```text
+GET /health
+GET /status
+GET /routes
+```
+
+`/health` reports process readiness and uptime.
+
+`/status` reports aggregate request/fallback counters, the last selected route, and route-state
+summaries.
+
+`/routes` reports safe per-route details including priority, provider/model identity, declared
+capabilities, current cooldown state, current eligibility, attempts, selections, successes,
+failures, skips, recent failure status, and average observed latency.
+
+These endpoints are intentionally read-only. They do not participate in route ordering,
+eligibility, cooldowns, or fallback decisions. They also omit credential values and credential
+environment-variable names.
+
+Example:
+
+```bash
+curl -s http://127.0.0.1:4000/health | python -m json.tool
+curl -s http://127.0.0.1:4000/status | python -m json.tool
+curl -s http://127.0.0.1:4000/routes | python -m json.tool
+```
+
+A future dashboard or VS Code extension can consume these interfaces without becoming part of
+the routing core.
 
 ## Setup
 
@@ -168,7 +202,9 @@ curl -N http://127.0.0.1:4000/v1/chat/completions \
 ```
 
 See [`docs/PHASE3-SMOKE.md`](docs/PHASE3-SMOKE.md) for streaming, tool-calling, capability
-filtering, and pre-stream fallback smoke tests.
+filtering, and pre-stream fallback smoke tests. See
+[`docs/PHASE4-SMOKE.md`](docs/PHASE4-SMOKE.md) for status, cooldown, and fallback-observability
+smoke tests.
 
 ## Development
 

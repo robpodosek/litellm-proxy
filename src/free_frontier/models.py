@@ -24,7 +24,7 @@ class ServerConfig(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    """Global Phase 3 routing policy."""
+    """Global Phase 4 routing policy."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -71,7 +71,7 @@ class LogicalModelDefinition(BaseModel):
 
 
 class AppConfig(BaseModel):
-    """Validated Free Frontier configuration for Phase 3."""
+    """Validated Free Frontier configuration for Phase 4."""
 
     model_config = ConfigDict(extra="forbid")
 

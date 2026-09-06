@@ -1,4 +1,4 @@
-# Phase 3 example configuration.
+# Phase 4 example configuration.
 #
 # Route order under logical_models."free-frontier" is preference order.
 # Only routes with enabled=true AND free=true are eligible for v0.1 routing.
@@ -23,7 +23,7 @@ capabilities = ["streaming", "tools", "structured_output"]
 # Enable this route after adding GROQ_API_KEY to .env.
 # GPT-OSS 120B supports structured outputs too, but Groq currently documents
 # restrictions when structured outputs are combined with streaming/tool use.
-# Phase 3 keeps the declaration conservative until route-level capability
+# Free Frontier keeps the declaration conservative until route-level capability
 # combination constraints exist.
 [routes."groq-gpt-oss"]
 provider = "groq"

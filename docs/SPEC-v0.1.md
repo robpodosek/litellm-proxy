@@ -263,7 +263,7 @@ Free Frontier does not maintain conversation memory, agent memory, task state, r
 
 Monitoring is part of the core; monitoring presentation is not.
 
-The core should emit structured events and/or expose read-only status information sufficient to answer questions such as:
+The core should emit structured events and expose read-only status information sufficient to answer questions such as:
 
 - which route served the last request?
 - why was the preferred route skipped?
@@ -271,6 +271,16 @@ The core should emit structured events and/or expose read-only status informatio
 - when does a cooldown expire?
 - what fallback attempts occurred?
 - which routes are currently eligible?
+
+v0.1 read-only status surfaces are:
+
+```text
+GET /health
+GET /status
+GET /routes
+```
+
+These endpoints may expose safe route/provider/model metadata needed to explain routing, but they must not expose credential values or credential environment-variable names. Reading them must not change request counters, route order, eligibility, cooldown policy, or fallback behavior.
 
 Observability must not require a terminal UI.
 

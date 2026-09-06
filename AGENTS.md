@@ -146,12 +146,12 @@ must consume status/observability interfaces rather than own routing decisions.
 
 ## Current phase
 
-Phase 0, Phase 1, and Phase 2 acceptance gates have passed.
+Phase 0 through Phase 3 acceptance gates have passed.
 
-Current implementation target: **Phase 3 - capability-aware routing, streaming, and tools.**
+Current implementation target: **Phase 4 - headless observability and status API.**
 
-Do not start Phase 4 status/dashboard work until Phase 3 acceptance tests and real smoke tests
-pass.
+Do not build a dashboard, terminal UI, or VS Code extension in Phase 4. The core should expose
+safe read-only state that future presentation layers can consume.
 
 ## Testing requirements
 
@@ -167,16 +167,16 @@ git diff --check
 Tests should use fake transports whenever possible so normal test runs consume no provider
 quota.
 
-Phase 3 must prove at minimum:
+Phase 4 must prove at minimum:
 
-1. tools requests skip routes without `tools`
-2. streaming requests skip routes without `streaming`
-3. structured-output requests skip routes without `structured_output`
-4. a compatible route streams through `free-frontier`
-5. a failure before the first stream chunk can transparently fall back
-6. a failure after the first stream chunk never splices another route
-7. OpenAI-compatible tool calls pass through the logical-model abstraction
-8. physical model names remain hidden from the required client configuration
+1. `/health` exposes small liveness/readiness state
+2. `/status` exposes aggregate request/fallback state
+3. `/routes` exposes safe per-route eligibility, cooldown, capability, and outcome state
+4. recent fallback behavior can be explained from read-only status data
+5. status reads do not alter request counters or routing decisions
+6. credential values and credential environment-variable names are not exposed
+7. streaming and non-streaming requests update metrics correctly
+8. all Phase 0 through Phase 3 routing behavior remains unchanged
 
 ## Code style
 

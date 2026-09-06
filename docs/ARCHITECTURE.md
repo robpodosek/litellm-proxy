@@ -39,14 +39,18 @@ Physical provider/model identities are internal route configuration.
 
 ### `app.py`
 
-Owns the external OpenAI-compatible HTTP surface:
+Owns the external HTTP surface:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `GET /health`
+- `GET /status`
+- `GET /routes`
 - JSON error envelopes
 - server-sent event framing for streamed chat completions
 
-It does not select providers itself.
+It does not select providers itself. Read-only status endpoints consume routing and observability
+state without changing route order, eligibility, cooldown policy, or fallback behavior.
 
 ### `config.py` and `models.py`
 
@@ -100,6 +104,23 @@ never splices content from another model.
 
 Owns in-memory route cooldown timing. Cooldown state affects selection but is independent of
 any UI.
+
+### `observability.py`
+
+Owns safe, in-memory counters and recent route outcomes emitted by the request and routing
+paths. It records:
+
+- request totals, successes, failures, and stream/non-stream counts
+- fallback totals
+- route attempts, selections, successes, failures, and skips
+- recent failure kind/status
+- average observed route latency
+- last selected route and timestamps
+- process start time and uptime
+
+It never decides whether a route is eligible or which route should be selected. Credential
+values, credential environment-variable names, API bases, and transport-specific configuration
+are not exposed through status payloads.
 
 ### `providers/`
 
@@ -158,7 +179,7 @@ models.
 
 ## Observability
 
-Routing logs report decisions such as:
+Routing logs still report individual decisions such as:
 
 - route skipped because ineligible
 - route skipped because capability missing
@@ -168,8 +189,25 @@ Routing logs report decisions such as:
 - route success
 - stream failure after commit
 
-Phase 4 may add read-only status APIs and counters. Those interfaces must consume routing state
-rather than participate in routing decisions.
+Phase 4 adds read-only machine-readable state:
+
+```text
+GET /health
+GET /status
+GET /routes
+```
+
+`/health` is intentionally small and exposes process health/readiness plus uptime.
+
+`/status` exposes aggregate request/fallback counts, the last selected route, and route-state
+summaries.
+
+`/routes` exposes safe per-route configuration metadata, capability declarations, current
+cooldown state, eligibility, and recent route metrics. It intentionally does not expose
+credentials or credential environment-variable names.
+
+These endpoints are consumers of routing state. Calling them does not increment inference
+request counters and must not change which route a later inference request selects.
 
 ## Future presentation layers
 

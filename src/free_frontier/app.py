@@ -9,8 +9,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from free_frontier import __version__
 from free_frontier.config import load_config
 from free_frontier.models import AppConfig
+from free_frontier.observability import ObservabilityState
 from free_frontier.providers import CompletionTransport, LiteLLMTransport, TransportError
 from free_frontier.routing import (
     AllRoutesUnavailable,
@@ -51,25 +53,118 @@ def _error(
     )
 
 
-async def _sse_events(chunks: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
-    async for chunk in chunks:
-        yield f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+async def _sse_events(
+    chunks: AsyncIterator[dict[str, Any]],
+    observability: ObservabilityState,
+) -> AsyncIterator[str]:
+    try:
+        async for chunk in chunks:
+            yield f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+    except Exception:
+        observability.record_request_failed("stream_interrupted")
+        raise
+
+    observability.record_request_succeeded()
     yield "data: [DONE]\n\n"
 
 
 def create_app(
     config: AppConfig | None = None,
     transport: CompletionTransport | None = None,
+    observability: ObservabilityState | None = None,
 ) -> FastAPI:
     resolved_config = config or load_config()
     resolved_transport = transport or LiteLLMTransport()
-    router = Router(resolved_config, resolved_transport)
+    resolved_observability = observability or ObservabilityState(resolved_config.routes)
+    router = Router(
+        resolved_config,
+        resolved_transport,
+        observability=resolved_observability,
+    )
 
     app = FastAPI(
         title="Free Frontier",
-        version="0.1.0a3",
+        version=__version__,
         description="OpenAI-compatible free-tier LLM routing proxy.",
     )
+    app.state.router = router
+    app.state.observability = resolved_observability
+
+    def route_rows() -> list[dict[str, Any]]:
+        logical = resolved_config.logical_models["free-frontier"]
+        rows: list[dict[str, Any]] = []
+
+        for priority, route_id in enumerate(logical.routes, start=1):
+            route = resolved_config.routes[route_id]
+            remaining = router.cooldown_remaining(route_id)
+            configured_eligible = route.enabled and route.free
+            eligible_now = configured_eligible and remaining <= 0
+            rows.append(
+                {
+                    "id": route_id,
+                    "priority": priority,
+                    "provider": route.provider,
+                    "model": route.model,
+                    "enabled": route.enabled,
+                    "free": route.free,
+                    "capabilities": sorted(
+                        capability.value for capability in route.capabilities
+                    ),
+                    "eligible_now": eligible_now,
+                    "cooldown": {
+                        "active": remaining > 0,
+                        "remaining_seconds": round(remaining, 3),
+                    },
+                    "metrics": resolved_observability.route_snapshot(route_id),
+                }
+            )
+
+        return rows
+
+    @app.get("/health")
+    async def health() -> dict[str, Any]:
+        routes = route_rows()
+        ready = any(route["eligible_now"] for route in routes)
+        return {
+            "status": "ok" if ready else "degraded",
+            "ready": ready,
+            "version": __version__,
+            "uptime_seconds": round(resolved_observability.uptime_seconds(), 3),
+        }
+
+    @app.get("/status")
+    async def status() -> dict[str, Any]:
+        routes = route_rows()
+        eligible = sum(1 for route in routes if route["eligible_now"])
+        cooling = sum(1 for route in routes if route["cooldown"]["active"])
+        disabled = sum(1 for route in routes if not route["enabled"])
+        paid_ineligible = sum(1 for route in routes if not route["free"])
+        snapshot = resolved_observability.status_snapshot()
+
+        return {
+            "status": "ok" if eligible else "degraded",
+            "version": __version__,
+            "started_at": snapshot["started_at"],
+            "uptime_seconds": snapshot["uptime_seconds"],
+            "logical_model": "free-frontier",
+            "last_selected_route": snapshot["last_selected_route"],
+            "requests": snapshot["requests"],
+            "routes": {
+                "configured": len(routes),
+                "eligible_now": eligible,
+                "cooling_down": cooling,
+                "disabled": disabled,
+                "paid_ineligible": paid_ineligible,
+            },
+        }
+
+    @app.get("/routes")
+    async def routes() -> dict[str, Any]:
+        return {
+            "object": "list",
+            "logical_model": "free-frontier",
+            "data": route_rows(),
+        }
 
     @app.get("/v1/models")
     async def list_models() -> dict[str, Any]:
@@ -93,20 +188,25 @@ def create_app(
     ) -> dict[str, Any] | JSONResponse | StreamingResponse:
         payload = request.model_dump(exclude={"model"}, exclude_none=True)
         payload["stream"] = request.stream
+        resolved_observability.record_request_started(streaming=request.stream)
 
         try:
             if request.stream:
                 chunks = await router.stream(request.model, payload)
                 return StreamingResponse(
-                    _sse_events(chunks),
+                    _sse_events(chunks, resolved_observability),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
                         "X-Accel-Buffering": "no",
                     },
                 )
-            return await router.complete(request.model, payload)
+
+            response = await router.complete(request.model, payload)
+            resolved_observability.record_request_succeeded()
+            return response
         except UnknownLogicalModel:
+            resolved_observability.record_request_failed("model_not_found")
             return _error(
                 404,
                 f"Unknown model '{request.model}'. Use a logical model returned by /v1/models.",
@@ -115,6 +215,7 @@ def create_app(
                 param="model",
             )
         except NoCompatibleRoutes as exc:
+            resolved_observability.record_request_failed("unsupported_capabilities")
             required = ", ".join(sorted(capability.value for capability in exc.required))
             return _error(
                 400,
@@ -123,6 +224,7 @@ def create_app(
                 code="unsupported_capabilities",
             )
         except AllRoutesUnavailable:
+            resolved_observability.record_request_failed("all_routes_unavailable")
             return _error(
                 503,
                 "All eligible free routes are temporarily unavailable.",
@@ -130,6 +232,7 @@ def create_app(
                 code="all_routes_unavailable",
             )
         except TransportError:
+            resolved_observability.record_request_failed("upstream_error")
             return _error(
                 502,
                 "An upstream route failed with a non-retryable error.",

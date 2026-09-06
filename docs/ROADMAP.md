@@ -2,7 +2,7 @@
 
 This roadmap turns the specification into narrow implementation phases. Do not start a later phase until the current phase's acceptance gate passes.
 
-Current implementation target: **Phase 3**. Phase 0, Phase 1, and Phase 2 acceptance gates have passed.
+Current implementation target: **Phase 4**. Phase 0 through Phase 3 acceptance gates have passed.
 
 ## Phase 0 — Reset and contract
 
@@ -131,11 +131,14 @@ Hermes/Cline-style requests using streaming and tools can target only `free-fron
 Deliverables:
 
 - structured routing events/logs
-- safe counters and recent route outcomes
-- health endpoint
-- read-only route/status endpoint(s)
+- safe in-memory request and route counters
+- `GET /health` liveness/readiness endpoint
+- `GET /status` aggregate status endpoint
+- `GET /routes` read-only per-route status endpoint
 - cooldown expiry visibility
 - selected-route/fallback visibility
+- route attempt/success/failure/skip metrics
+- safe latency observations
 - secret redaction tests
 
 ### Acceptance gate

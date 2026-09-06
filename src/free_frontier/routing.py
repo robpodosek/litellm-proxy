@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from free_frontier.capabilities import missing_capabilities, required_capabilities
 from free_frontier.cooldowns import CooldownTracker
 from free_frontier.models import AppConfig, Capability, PhysicalRoute, RouteDefinition
+from free_frontier.observability import ObservabilityState
 from free_frontier.providers.base import CompletionTransport, FailureKind, TransportError
 
 logger = logging.getLogger("uvicorn.error.free_frontier.routing")
@@ -36,13 +38,24 @@ class Router:
         transport: CompletionTransport,
         *,
         cooldowns: CooldownTracker | None = None,
+        observability: ObservabilityState | None = None,
     ) -> None:
         self._config = config
         self._transport = transport
         self._cooldowns = cooldowns or CooldownTracker()
+        self._observability = observability or ObservabilityState(config.routes)
+
+    @property
+    def observability(self) -> ObservabilityState:
+        return self._observability
 
     def logical_models(self) -> list[str]:
         return sorted(self._config.logical_models)
+
+    def cooldown_remaining(self, route_id: str) -> float:
+        """Read current cooldown state without changing routing policy."""
+
+        return self._cooldowns.remaining(route_id)
 
     def _physical_route(
         self,
@@ -90,15 +103,23 @@ class Router:
             route = self._config.routes[route_id]
             if not route.enabled or not route.free:
                 logger.info("route=%s event=skipped reason=ineligible", route_id)
+                self._observability.record_route_skip(route_id, "ineligible")
                 continue
 
             eligible_free_seen = True
             missing = missing_capabilities(route.capabilities, required)
             if missing:
+                missing_names = ",".join(
+                    sorted(capability.value for capability in missing)
+                )
                 logger.info(
                     "route=%s event=skipped reason=capability missing=%s",
                     route_id,
-                    ",".join(sorted(capability.value for capability in missing)),
+                    missing_names,
+                )
+                self._observability.record_route_skip(
+                    route_id,
+                    f"capability:{missing_names}",
                 )
                 continue
 
@@ -125,6 +146,7 @@ class Router:
                     route_id,
                     remaining,
                 )
+                self._observability.record_route_skip(route_id, "cooldown")
                 continue
             available.append((route_id, route))
 
@@ -135,6 +157,8 @@ class Router:
         route_id: str,
         route: RouteDefinition,
         error: TransportError,
+        *,
+        latency_ms: float,
     ) -> bool:
         if not error.fallback_worthy:
             logger.error(
@@ -142,6 +166,13 @@ class Router:
                 route_id,
                 error.kind,
                 error.status_code,
+            )
+            self._observability.record_route_failure(
+                route_id,
+                kind=error.kind.value,
+                status_code=error.status_code,
+                latency_ms=latency_ms,
+                fallback=False,
             )
             return False
 
@@ -153,6 +184,13 @@ class Router:
             error.kind,
             error.status_code,
             cooldown_seconds,
+        )
+        self._observability.record_route_failure(
+            route_id,
+            kind=error.kind.value,
+            status_code=error.status_code,
+            latency_ms=latency_ms,
+            fallback=True,
         )
         return True
 
@@ -166,15 +204,26 @@ class Router:
         for route_id, route in self._available_routes(logical_model, payload):
             attempted = True
             physical = self._physical_route(route_id, route)
+            started = time.perf_counter()
+            self._observability.record_route_attempt(route_id)
             logger.info("route=%s event=attempt mode=completion", route_id)
 
             try:
                 response = await self._transport.complete(physical, payload)
             except TransportError as exc:
-                if self._record_failure(route_id, route, exc):
+                latency_ms = (time.perf_counter() - started) * 1000
+                if self._record_failure(
+                    route_id,
+                    route,
+                    exc,
+                    latency_ms=latency_ms,
+                ):
                     continue
                 raise
 
+            latency_ms = (time.perf_counter() - started) * 1000
+            self._observability.record_route_selected(route_id)
+            self._observability.record_route_success(route_id, latency_ms=latency_ms)
             logger.info("route=%s event=success mode=completion", route_id)
             response["model"] = logical_model
             return response
@@ -195,6 +244,8 @@ class Router:
         for route_id, route in self._available_routes(logical_model, payload):
             attempted = True
             physical = self._physical_route(route_id, route)
+            started = time.perf_counter()
+            self._observability.record_route_attempt(route_id)
             logger.info("route=%s event=attempt mode=stream", route_id)
 
             try:
@@ -205,21 +256,35 @@ class Router:
                     "upstream stream ended before producing a chunk",
                     kind=FailureKind.TEMPORARY,
                 )
-                if self._record_failure(route_id, route, error):
+                latency_ms = (time.perf_counter() - started) * 1000
+                if self._record_failure(
+                    route_id,
+                    route,
+                    error,
+                    latency_ms=latency_ms,
+                ):
                     continue
                 raise error from None
             except TransportError as exc:
-                if self._record_failure(route_id, route, exc):
+                latency_ms = (time.perf_counter() - started) * 1000
+                if self._record_failure(
+                    route_id,
+                    route,
+                    exc,
+                    latency_ms=latency_ms,
+                ):
                     continue
                 raise
 
             first_chunk["model"] = logical_model
+            self._observability.record_route_selected(route_id)
             logger.info("route=%s event=success mode=stream committed=true", route_id)
 
             async def committed_stream(
                 first: dict[str, Any] = first_chunk,
                 rest: AsyncIterator[dict[str, Any]] = upstream,
                 committed_route_id: str = route_id,
+                attempt_started: float = started,
             ) -> AsyncIterator[dict[str, Any]]:
                 yield first
                 try:
@@ -227,6 +292,14 @@ class Router:
                         chunk["model"] = logical_model
                         yield chunk
                 except TransportError as exc:
+                    latency_ms = (time.perf_counter() - attempt_started) * 1000
+                    self._observability.record_route_failure(
+                        committed_route_id,
+                        kind=exc.kind.value,
+                        status_code=exc.status_code,
+                        latency_ms=latency_ms,
+                        fallback=False,
+                    )
                     logger.error(
                         (
                             "route=%s event=stream_failed_after_commit kind=%s status=%s "
@@ -237,6 +310,12 @@ class Router:
                         exc.status_code,
                     )
                     raise
+
+                latency_ms = (time.perf_counter() - attempt_started) * 1000
+                self._observability.record_route_success(
+                    committed_route_id,
+                    latency_ms=latency_ms,
+                )
 
             return committed_stream()
 
