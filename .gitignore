@@ -13,6 +13,9 @@ dist/
 # Secrets / local environment
 .env
 
+# Local Free Frontier runtime configuration
+free-frontier.toml
+
 # Local editor / tooling
 .vscode/
 .idea/

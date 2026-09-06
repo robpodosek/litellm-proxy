@@ -1,3 +1,3 @@
-"""Free Frontier: an OpenAI-compatible free-tier LLM routing proxy."""
+"""Free Frontier model proxy."""
 
-__version__ = "0.1.0a0"
+__version__ = "0.1.0a1"
