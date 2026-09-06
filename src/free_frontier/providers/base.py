@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -49,3 +50,9 @@ class CompletionTransport(Protocol):
         route: PhysicalRoute,
         payload: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+    async def stream(
+        self,
+        route: PhysicalRoute,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]: ...

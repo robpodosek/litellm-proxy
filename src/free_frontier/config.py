@@ -23,7 +23,7 @@ def load_config(
     *,
     env_path: str | Path | None = DEFAULT_ENV_PATH,
 ) -> AppConfig:
-    """Load TOML configuration and validate Phase 2 runtime requirements.
+    """Load TOML configuration and validate Phase 3 runtime requirements.
 
     Credential values are never inserted into the typed configuration object. Only the
     environment variable names are retained, which keeps secrets out of reprs/status data.

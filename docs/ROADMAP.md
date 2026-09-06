@@ -2,7 +2,7 @@
 
 This roadmap turns the specification into narrow implementation phases. Do not start a later phase until the current phase's acceptance gate passes.
 
-Current implementation target: **Phase 2**. Phase 0 and Phase 1 acceptance gates have passed.
+Current implementation target: **Phase 3**. Phase 0, Phase 1, and Phase 2 acceptance gates have passed.
 
 ## Phase 0 — Reset and contract
 

@@ -1,186 +1,184 @@
-# Free Frontier architecture
+# Free Frontier Architecture
 
-## Architectural position
+## Product boundary
 
-Free Frontier sits below agent frameworks and other AI clients.
-
-```text
-Hermes / Cline / OpenAI-compatible client
-                  │
-                  ▼
-           Free Frontier API
-                  │
-                  ▼
-          logical model router
-                  │
-         ┌────────┼────────┐
-         ▼        ▼        ▼
-      Route A  Route B  Route C
-         │        │        │
-         └────────┼────────┘
-                  ▼
-             LiteLLM
-                  │
-                  ▼
-        upstream providers
-```
-
-Free Frontier does not understand agent plans, repositories, coding tasks, or workflow state.
-Its responsibility is inference routing behind a stable logical model interface.
-
-## Phase 2 component boundaries
-
-### API layer: `app.py`
-
-Responsibilities:
-
-- expose OpenAI-compatible endpoints
-- accept the public `free-frontier` logical model
-- preserve unknown compatible request parameters
-- reject streaming until Phase 3
-- map terminal routing failures to safe API errors
-
-It does not choose provider order or cooldown durations.
-
-### Configuration: `config.py` + `models.py`
-
-Responsibilities:
-
-- load TOML and `.env`
-- validate route references
-- preserve ordered route preference
-- validate `enabled` and `free` eligibility metadata
-- load configurable cooldown policy
-- require credentials only for enabled free routes that may be selected
-- keep credential values out of typed configuration objects
-
-Invalid route references fail at startup.
-
-### Router: `routing.py`
-
-Responsibilities:
-
-- resolve a logical model to its ordered candidate routes
-- enforce the v0.1 free-only invariant
-- skip disabled and cooling routes
-- attempt fallback after normalized fallback-worthy failures
-- return the first successful normalized response
-- keep physical model identity hidden from normal clients
-- return a terminal all-routes-unavailable condition when no eligible route succeeds
-
-Route order in the logical model definition is deterministic preference order.
-
-### Cooldown state: `cooldowns.py`
-
-Responsibilities:
-
-- record per-route cooldown expiry using a monotonic clock
-- answer whether a route is currently cooling down
-- make expired routes eligible automatically
-
-The tracker is intentionally headless and in-memory in Phase 2. It exposes no dashboard or
-status API. Phase 4 will add read-only observability around routing state without making UI
-code part of the routing path.
-
-### Provider transport: `providers/`
-
-Responsibilities:
-
-- invoke upstream providers through LiteLLM
-- keep API-key values behind the proxy
-- normalize provider failures into safe `TransportError` categories
-- preserve provider `Retry-After` hints when available
-- normalize provider responses into OpenAI-style data structures
-
-LiteLLM handles provider-specific API differences. Free Frontier owns routing policy.
-
-### Failure classification
-
-Phase 2 distinguishes:
-
-- `rate_limit`: fallback-worthy; enters cooldown
-- `temporary`: selected timeouts/5xx/capacity failures; fallback-worthy; enters cooldown
-- `route_unavailable`: upstream model-not-found/route-unavailable failures; fallback-worthy;
-  enters cooldown
-- `non_retryable`: terminal for the request; does not silently fall back
-
-Capability-specific incompatibility is intentionally deferred to Phase 3.
-
-## Free-only invariant
-
-A route is eligible only when:
+Free Frontier sits between OpenAI-compatible clients and upstream LLM providers.
 
 ```text
-enabled == true
-AND
-free == true
-AND
-not cooling down
+Hermes / Cline / other client
+            |
+            v
+     OpenAI-compatible API
+            |
+            v
+      Free Frontier router
+        |     |      |
+        v     v      v
+      route route  route
+            |
+            v
+          LiteLLM
+            |
+            v
+     upstream providers
 ```
 
-A configured route with `free = false` is never selected in v0.1. If no eligible free route
-succeeds, the router fails rather than selecting paid inference.
+The core does not understand agent tasks, repositories, memory, handoffs, or IDE workflows.
 
-This software cannot override billing rules attached to the provider account behind an API
-key, so strict zero-cost users must also configure their provider accounts appropriately.
+## Public abstraction
 
-## Cooldown policy
-
-Global default:
-
-```toml
-[routing]
-default_cooldown_seconds = 60
-```
-
-A route may override it:
-
-```toml
-[routes."some-route"]
-cooldown_seconds = 120
-```
-
-If an upstream error supplies a numeric `Retry-After`, Phase 2 uses the longer of the
-configured cooldown and the provider hint. This avoids retrying earlier than either policy
-allows.
-
-## Current source layout
+Clients request logical models. v0.1 exposes:
 
 ```text
-src/free_frontier/
-├── __init__.py
-├── __main__.py
-├── app.py
-├── cli.py
-├── config.py
-├── cooldowns.py
-├── models.py
-├── routing.py
-└── providers/
-    ├── __init__.py
-    ├── base.py
-    └── litellm.py
+free-frontier
 ```
 
-Do not split these responsibilities into more modules merely to match a future diagram.
-Create new boundaries when later phases actually require them.
+Physical provider/model identities are internal route configuration.
 
-## Later phases
+## Main components
 
-Phase 3 adds capability-aware selection, streaming, and tools.
+### `app.py`
 
-Phase 4 adds headless observability and read-only status APIs.
+Owns the external OpenAI-compatible HTTP surface:
 
-Phase 5 hardens real consumer/provider integration and packaging.
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- JSON error envelopes
+- server-sent event framing for streamed chat completions
 
-A future dashboard or VS Code extension should consume stable status interfaces as a client:
+It does not select providers itself.
+
+### `config.py` and `models.py`
+
+Own validated runtime configuration:
+
+- server settings
+- logical models
+- physical routes
+- free-only metadata
+- route capability metadata
+- cooldown settings
+- credential environment-variable names
+
+Secrets stay in environment variables rather than typed config state.
+
+### `capabilities.py`
+
+Extracts request requirements from OpenAI-compatible request fields.
+
+Current capability signals include:
+
+- `stream=true` -> `streaming`
+- tools/function fields -> `tools`
+- JSON/JSON-schema `response_format` -> `structured_output`
+- image content parts -> `vision`
+
+Unknown route support is treated conservatively.
+
+### `routing.py`
+
+Owns Free Frontier policy:
+
+1. resolve logical model
+2. enforce enabled + free-only eligibility
+3. filter routes by request capabilities
+4. skip routes in cooldown
+5. attempt routes in configured order
+6. classify fallback behavior through normalized transport errors
+7. rewrite returned model identity to the logical model
+
+For non-streaming requests, fallback may continue until a compatible free route succeeds or all
+eligible routes are exhausted.
+
+For streaming requests, the router prefetches the first upstream chunk before committing the
+HTTP stream. A fallback-worthy failure before that chunk can fall back transparently.
+
+After the first chunk, the route is committed. A later stream failure terminates the stream and
+never splices content from another model.
+
+### `cooldowns.py`
+
+Owns in-memory route cooldown timing. Cooldown state affects selection but is independent of
+any UI.
+
+### `providers/`
+
+Owns transport normalization.
+
+`LiteLLMTransport` translates Free Frontier's internal `PhysicalRoute` plus normalized payload
+into LiteLLM calls for both normal and streaming completion paths. It normalizes provider
+exceptions into safe routing failure categories.
+
+Provider transports do not decide cost eligibility, route order, capability policy, or
+fallback semantics.
+
+## Capability-aware selection
+
+For a request requiring:
 
 ```text
-                    ┌── CLI/status client
-                    │
-Free Frontier Core ─┼── web dashboard
-                    │
-                    └── VS Code extension
+streaming + tools
 ```
 
-Routing correctness must not depend on any presentation layer being present.
+this route is eligible:
+
+```text
+capabilities = [streaming, tools]
+```
+
+while this route is skipped before transport:
+
+```text
+capabilities = [streaming]
+```
+
+Capability metadata should describe what Free Frontier can safely use, not every feature a
+provider advertises in isolation.
+
+## Streaming commit boundary
+
+```text
+request stream=true
+       |
+       v
+Route A start
+       |
+       +-- fails before first chunk --> cooldown/fallback to Route B
+       |
+       v
+first chunk received
+       |
+       +-- response committed to Route A
+       |
+       +-- later failure --> terminate stream, no fallback splice
+```
+
+This boundary keeps transparent fallback from producing one response assembled from multiple
+models.
+
+## Observability
+
+Routing logs report decisions such as:
+
+- route skipped because ineligible
+- route skipped because capability missing
+- route skipped because cooldown active
+- route attempt
+- route failure and cooldown
+- route success
+- stream failure after commit
+
+Phase 4 may add read-only status APIs and counters. Those interfaces must consume routing state
+rather than participate in routing decisions.
+
+## Future presentation layers
+
+A future dashboard or VS Code extension should sit outside the routing core:
+
+```text
+                 +-> CLI/status client
+Free Frontier ---+-> web dashboard
+                 +-> VS Code extension
+```
+
+The proxy must remain fully functional without any of them.

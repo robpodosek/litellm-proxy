@@ -1,8 +1,9 @@
-# Phase 2 example configuration.
+# Phase 3 example configuration.
 #
 # Route order under logical_models."free-frontier" is preference order.
 # Only routes with enabled=true AND free=true are eligible for v0.1 routing.
-# Disabled routes do not require credentials at startup.
+# A route is selected only when its declared capabilities satisfy the request.
+# Unknown capability support is intentionally treated conservatively.
 
 [server]
 host = "127.0.0.1"
@@ -17,14 +18,20 @@ model = "gemini/gemini-3.6-flash"
 enabled = true
 free = true
 api_key_env = "GEMINI_API_KEY"
+capabilities = ["streaming", "tools", "structured_output"]
 
 # Enable this route after adding GROQ_API_KEY to .env.
+# GPT-OSS 120B supports structured outputs too, but Groq currently documents
+# restrictions when structured outputs are combined with streaming/tool use.
+# Phase 3 keeps the declaration conservative until route-level capability
+# combination constraints exist.
 [routes."groq-gpt-oss"]
 provider = "groq"
 model = "groq/openai/gpt-oss-120b"
 enabled = false
 free = true
 api_key_env = "GROQ_API_KEY"
+capabilities = ["streaming", "tools"]
 
 [logical_models."free-frontier"]
 routes = ["gemini-flash", "groq-gpt-oss"]

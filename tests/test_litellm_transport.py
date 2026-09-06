@@ -31,6 +31,7 @@ def test_litellm_transport_calls_acompletion_with_internal_route(monkeypatch) ->
         id="gemini-flash",
         provider="gemini",
         model="gemini/gemini-3.6-flash",
+        capabilities=frozenset(),
         api_key_env="GEMINI_API_KEY",
         api_base=None,
         litellm_params={},
@@ -67,6 +68,7 @@ def test_litellm_transport_classifies_rate_limit_for_fallback(monkeypatch) -> No
         id="rate-limited",
         provider="fake",
         model="fake/model",
+        capabilities=frozenset(),
         api_key_env=None,
         api_base=None,
         litellm_params={},
@@ -96,6 +98,7 @@ def test_litellm_transport_classifies_not_found_as_route_unavailable(monkeypatch
         id="stale-model",
         provider="fake",
         model="fake/stale",
+        capabilities=frozenset(),
         api_key_env=None,
         api_base=None,
         litellm_params={},
@@ -107,5 +110,99 @@ def test_litellm_transport_classifies_not_found_as_route_unavailable(monkeypatch
         assert exc.kind == FailureKind.ROUTE_UNAVAILABLE
         assert exc.fallback_worthy is True
         assert exc.status_code == 404
+    else:  # pragma: no cover - test guard
+        raise AssertionError("expected TransportError")
+
+
+def test_litellm_transport_streams_chunks(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeChunk:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+        def model_dump(self) -> dict[str, Any]:
+            return {
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake/model",
+                "choices": [{"index": 0, "delta": {"content": self.content}}],
+            }
+
+    class FakeStream:
+        def __aiter__(self):
+            async def iterate():
+                yield FakeChunk("one")
+                yield FakeChunk("two")
+
+            return iterate()
+
+    async def fake_acompletion(**kwargs: Any) -> FakeStream:
+        captured.update(kwargs)
+        return FakeStream()
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(acompletion=fake_acompletion))
+
+    route = PhysicalRoute(
+        id="streaming",
+        provider="fake",
+        model="fake/model",
+        capabilities=frozenset(),
+        api_key_env=None,
+        api_base=None,
+        litellm_params={},
+    )
+
+    async def collect() -> list[dict[str, Any]]:
+        stream = await LiteLLMTransport().stream(
+            route,
+            {"messages": [{"role": "user", "content": "ping"}], "stream": True},
+        )
+        return [chunk async for chunk in stream]
+
+    chunks = asyncio.run(collect())
+
+    assert captured["model"] == "fake/model"
+    assert captured["stream"] is True
+    assert [chunk["choices"][0]["delta"]["content"] for chunk in chunks] == ["one", "two"]
+
+
+def test_litellm_transport_classifies_stream_iteration_failure(monkeypatch) -> None:
+    class ServiceUnavailableError(Exception):
+        status_code = 503
+
+    class FakeStream:
+        def __aiter__(self):
+            async def iterate():
+                raise ServiceUnavailableError("stream failed")
+                yield  # pragma: no cover
+
+            return iterate()
+
+    async def fake_acompletion(**kwargs: Any) -> FakeStream:
+        return FakeStream()
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(acompletion=fake_acompletion))
+
+    route = PhysicalRoute(
+        id="streaming",
+        provider="fake",
+        model="fake/model",
+        capabilities=frozenset(),
+        api_key_env=None,
+        api_base=None,
+        litellm_params={},
+    )
+
+    async def consume() -> None:
+        stream = await LiteLLMTransport().stream(route, {"messages": [], "stream": True})
+        await anext(stream)
+
+    try:
+        asyncio.run(consume())
+    except TransportError as exc:
+        assert exc.kind == FailureKind.TEMPORARY
+        assert exc.status_code == 503
+        assert exc.fallback_worthy is True
     else:  # pragma: no cover - test guard
         raise AssertionError("expected TransportError")

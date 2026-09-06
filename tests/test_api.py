@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -10,10 +11,10 @@ from free_frontier.providers.base import FailureKind, TransportError
 class FakeTransport:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.calls: list[tuple[PhysicalRoute, dict[str, Any]]] = []
+        self.calls: list[tuple[str, PhysicalRoute, dict[str, Any]]] = []
 
     async def complete(self, route: PhysicalRoute, payload: dict[str, Any]) -> dict[str, Any]:
-        self.calls.append((route, payload))
+        self.calls.append(("complete", route, payload))
         if self.fail:
             raise TransportError("fake upstream failed")
         return {
@@ -31,8 +32,33 @@ class FakeTransport:
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
 
+    async def stream(
+        self,
+        route: PhysicalRoute,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        self.calls.append(("stream", route, payload))
 
-def phase1_config() -> AppConfig:
+        async def chunks() -> AsyncIterator[dict[str, Any]]:
+            yield {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": route.model,
+                "choices": [{"index": 0, "delta": {"content": "pong"}, "finish_reason": None}],
+            }
+            yield {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": route.model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+
+        return chunks()
+
+
+def app_config(*, capabilities: list[str] | None = None) -> AppConfig:
     return AppConfig.model_validate(
         {
             "routes": {
@@ -41,6 +67,7 @@ def phase1_config() -> AppConfig:
                     "model": "fake-provider/physical-model",
                     "enabled": True,
                     "free": True,
+                    "capabilities": capabilities or [],
                 }
             },
             "logical_models": {"free-frontier": {"routes": ["hidden-route"]}},
@@ -50,7 +77,7 @@ def phase1_config() -> AppConfig:
 
 def test_models_exposes_only_logical_model() -> None:
     transport = FakeTransport()
-    client = TestClient(create_app(phase1_config(), transport))
+    client = TestClient(create_app(app_config(), transport))
 
     response = client.get("/v1/models")
 
@@ -62,7 +89,7 @@ def test_models_exposes_only_logical_model() -> None:
 
 def test_chat_completion_resolves_logical_model_to_physical_route() -> None:
     transport = FakeTransport()
-    client = TestClient(create_app(phase1_config(), transport))
+    client = TestClient(create_app(app_config(), transport))
 
     response = client.post(
         "/v1/chat/completions",
@@ -79,7 +106,8 @@ def test_chat_completion_resolves_logical_model_to_physical_route() -> None:
     assert body["choices"][0]["message"]["content"] == "pong"
 
     assert len(transport.calls) == 1
-    route, payload = transport.calls[0]
+    mode, route, payload = transport.calls[0]
+    assert mode == "complete"
     assert route.id == "hidden-route"
     assert route.model == "fake-provider/physical-model"
     assert payload["messages"] == [{"role": "user", "content": "ping"}]
@@ -90,7 +118,7 @@ def test_chat_completion_resolves_logical_model_to_physical_route() -> None:
 
 def test_unknown_physical_or_logical_model_is_not_accepted() -> None:
     transport = FakeTransport()
-    client = TestClient(create_app(phase1_config(), transport))
+    client = TestClient(create_app(app_config(), transport))
 
     response = client.post(
         "/v1/chat/completions",
@@ -105,9 +133,33 @@ def test_unknown_physical_or_logical_model_is_not_accepted() -> None:
     assert transport.calls == []
 
 
-def test_phase1_explicitly_rejects_streaming() -> None:
+def test_streaming_returns_openai_compatible_sse_and_logical_model() -> None:
     transport = FakeTransport()
-    client = TestClient(create_app(phase1_config(), transport))
+    client = TestClient(create_app(app_config(capabilities=["streaming"]), transport))
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "free-frontier",
+            "messages": [{"role": "user", "content": "ping"}],
+            "stream": True,
+        },
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"model":"free-frontier"' in body
+    assert "fake-provider/physical-model" not in body
+    assert "data: [DONE]" in body
+    assert transport.calls[0][0] == "stream"
+    assert transport.calls[0][2]["stream"] is True
+
+
+def test_streaming_request_without_compatible_route_returns_clean_400() -> None:
+    transport = FakeTransport()
+    client = TestClient(create_app(app_config(), transport))
 
     response = client.post(
         "/v1/chat/completions",
@@ -119,13 +171,84 @@ def test_phase1_explicitly_rejects_streaming() -> None:
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unsupported_feature"
+    assert response.json()["error"]["code"] == "unsupported_capabilities"
     assert transport.calls == []
+
+
+def test_tool_request_is_forwarded_and_tool_calls_remain_compatible() -> None:
+    class ToolTransport(FakeTransport):
+        async def complete(
+            self,
+            route: PhysicalRoute,
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            self.calls.append(("complete", route, payload))
+            return {
+                "id": "chatcmpl-tools",
+                "object": "chat.completion",
+                "model": route.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "lookup_weather",
+                                        "arguments": '{"city":"Seattle"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+
+    transport = ToolTransport()
+    client = TestClient(create_app(app_config(capabilities=["tools"]), transport))
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "free-frontier",
+            "messages": [{"role": "user", "content": "weather in Seattle"}],
+            "tools": tools,
+            "tool_choice": "required",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "free-frontier"
+    assert body["choices"][0]["finish_reason"] == "tool_calls"
+    assert body["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == (
+        "lookup_weather"
+    )
+    assert transport.calls[0][2]["tools"] == tools
+    assert transport.calls[0][2]["tool_choice"] == "required"
 
 
 def test_single_upstream_failure_returns_clean_502_without_fallback() -> None:
     transport = FakeTransport(fail=True)
-    client = TestClient(create_app(phase1_config(), transport))
+    client = TestClient(create_app(app_config(), transport))
 
     response = client.post(
         "/v1/chat/completions",
@@ -143,7 +266,9 @@ def test_single_upstream_failure_returns_clean_502_without_fallback() -> None:
 def test_all_fallback_worthy_routes_unavailable_returns_clean_503() -> None:
     class TemporaryFailTransport:
         async def complete(
-            self, route: PhysicalRoute, payload: dict[str, Any]
+            self,
+            route: PhysicalRoute,
+            payload: dict[str, Any],
         ) -> dict[str, Any]:
             raise TransportError(
                 "temporary",

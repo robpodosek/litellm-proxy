@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from free_frontier.models import PhysicalRoute
@@ -58,8 +58,54 @@ def _classify_exception(exc: Exception) -> tuple[FailureKind, int | None, float 
     return FailureKind.NON_RETRYABLE, status, retry_after
 
 
+def _transport_error(route: PhysicalRoute, exc: Exception) -> TransportError:
+    kind, status, retry_after = _classify_exception(exc)
+    return TransportError(
+        f"Upstream route '{route.id}' failed via provider '{route.provider}'",
+        kind=kind,
+        status_code=status,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _as_dict(response: Any) -> dict[str, Any]:
+    if isinstance(response, dict):
+        return dict(response)
+    if hasattr(response, "model_dump"):
+        return response.model_dump()
+
+    try:
+        return dict(response)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive adapter guard
+        raise TransportError("LiteLLM returned an unsupported response type") from exc
+
+
 class LiteLLMTransport:
     """Provider-normalization transport backed by LiteLLM's Python SDK."""
+
+    def _kwargs(
+        self,
+        route: PhysicalRoute,
+        payload: dict[str, Any],
+        *,
+        stream: bool,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            **payload,
+            **route.litellm_params,
+            "model": route.model,
+            "stream": stream,
+        }
+        if route.api_key_env:
+            api_key = os.getenv(route.api_key_env)
+            if not api_key:
+                raise TransportError(
+                    f"Credential environment variable {route.api_key_env} is not set"
+                )
+            kwargs["api_key"] = api_key
+        if route.api_base:
+            kwargs["api_base"] = route.api_base
+        return kwargs
 
     async def complete(
         self,
@@ -71,39 +117,42 @@ class LiteLLMTransport:
         except ImportError as exc:  # pragma: no cover - packaging/runtime guard
             raise TransportError("LiteLLM is not installed") from exc
 
-        kwargs: dict[str, Any] = {
-            **payload,
-            **route.litellm_params,
-            "model": route.model,
-            "stream": False,
-        }
-        if route.api_key_env:
-            api_key = os.getenv(route.api_key_env)
-            if not api_key:
-                raise TransportError(
-                    f"Credential environment variable {route.api_key_env} is not set"
-                )
-            kwargs["api_key"] = api_key
-        if route.api_base:
-            kwargs["api_base"] = route.api_base
+        kwargs = self._kwargs(route, payload, stream=False)
 
         try:
             response = await litellm.acompletion(**kwargs)
         except Exception as exc:
-            kind, status, retry_after = _classify_exception(exc)
-            raise TransportError(
-                f"Upstream route '{route.id}' failed via provider '{route.provider}'",
-                kind=kind,
-                status_code=status,
-                retry_after_seconds=retry_after,
-            ) from exc
+            raise _transport_error(route, exc) from exc
 
-        if isinstance(response, dict):
-            return dict(response)
-        if hasattr(response, "model_dump"):
-            return response.model_dump()
+        return _as_dict(response)
+
+    async def stream(
+        self,
+        route: PhysicalRoute,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        try:
+            import litellm
+        except ImportError as exc:  # pragma: no cover - packaging/runtime guard
+            raise TransportError("LiteLLM is not installed") from exc
+
+        kwargs = self._kwargs(route, payload, stream=True)
 
         try:
-            return dict(response)
-        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive adapter guard
-            raise TransportError("LiteLLM returned an unsupported response type") from exc
+            response = await litellm.acompletion(**kwargs)
+        except Exception as exc:
+            raise _transport_error(route, exc) from exc
+
+        if not hasattr(response, "__aiter__"):
+            raise TransportError("LiteLLM returned a non-streaming response for stream=true")
+
+        async def chunks() -> AsyncIterator[dict[str, Any]]:
+            try:
+                async for chunk in response:
+                    yield _as_dict(chunk)
+            except TransportError:
+                raise
+            except Exception as exc:
+                raise _transport_error(route, exc) from exc
+
+        return chunks()

@@ -3,7 +3,7 @@
 **One endpoint. Multiple free LLM providers. Automatic fallback. No paid inference without explicit opt-in.**
 
 Free Frontier is a local, OpenAI-compatible model proxy that gives AI clients one stable
-endpoint while transparently routing requests across the free-tier model providers you
+endpoint while transparently routing requests across the free-tier provider/model routes you
 configure.
 
 Clients only need to know:
@@ -14,142 +14,87 @@ Model:    free-frontier
 ```
 
 Hermes, Cline, Continue, Open WebUI, custom applications, and other OpenAI-compatible clients
-sit above Free Frontier. They do not need to know which provider or physical model actually
-serves a request.
-
-```text
-Hermes / Cline / other client
-            │
-            ▼
-     ┌───────────────┐
-     │ Free Frontier │
-     │               │
-     │ free-frontier │
-     └───────┬───────┘
-             │
-      routing + fallback
-             │
-      ┌──────┼──────┐
-      ▼      ▼      ▼
-   Route A Route B Route C
-```
+sit above Free Frontier. They do not need to select the physical provider/model themselves.
 
 ## What Free Frontier owns
 
-Free Frontier owns the model-selection details that would otherwise leak into every client
-configuration:
+Free Frontier owns:
 
-- which provider/model is preferred
-- which configured routes are enabled and free-only eligible
-- which routes are rate-limited or cooling down
-- which fallback should be attempted next
-- how provider-specific APIs are normalized
+- logical-model resolution
+- ordered free-only route selection
+- rate-limit/service-failure fallback
+- cooldown and automatic re-eligibility
+- request capability detection
+- capability-aware route filtering
+- pre-stream fallback
+- provider normalization through LiteLLM
 
-The caller keeps using `free-frontier` throughout.
+The caller keeps requesting `free-frontier` throughout.
 
 ## You provide the API keys
 
-Free Frontier does **not** provide third-party API access. You provide API keys for the
+Free Frontier does **not** provide third-party API access. You supply API keys for the
 providers whose free tiers you want to use.
 
-You do not have to configure every supported provider. A route can remain disabled until you
-have configured its credential. Enabled free routes that declare an API-key environment
-variable must have that credential available at startup.
+You do not have to configure every provider. Disabled routes do not require credentials.
+Enabled free routes that declare an API-key environment variable require that credential at
+startup.
 
-Provider credentials stay behind Free Frontier. The client does not need upstream provider
-keys.
-
-## What happens when a route hits a limit?
-
-Phase 2 implements ordered free-only fallback and cooldowns.
-
-Given:
-
-```text
-Route A
-   ↓
-Route B
-   ↓
-Route C
-```
-
-Free Frontier tries Route A first. If A fails with a fallback-worthy route failure such as a
-rate limit or temporary upstream outage, Free Frontier:
-
-1. places A into cooldown
-2. attempts the next eligible free route
-3. returns the successful response through the same `free-frontier` model
-4. skips A on new requests while A is cooling down
-5. automatically makes A eligible again after its cooldown expires
-
-The caller never switches physical model names.
-
-The router also treats an upstream model-not-found response as a route-unavailable failure so
-a stale physical model can fall back instead of breaking the logical model immediately.
+Provider credentials stay behind Free Frontier. Clients only need the Free Frontier endpoint.
 
 ## Zero-cost policy
 
-For v0.1, Free Frontier is **free-only by design**.
+v0.1 is **free-only by design**.
 
-> If all eligible free routes are unavailable, Free Frontier fails instead of knowingly selecting paid inference.
+> If all eligible free routes are unavailable or incompatible, Free Frontier fails instead of knowingly selecting paid inference.
 
-A route with `free = false` is never selected by the v0.1 router even if it appears in a
-logical model's ordered route list.
+A route with `free = false` is never selected by the v0.1 router.
 
 ### Important account-level billing caveat
 
-Free Frontier controls the routes it selects. It cannot override the billing policy attached
-to an API account you provide.
+Free Frontier controls which routes it selects. It cannot override the billing policy attached
+to a provider account or API key you supply. If an upstream account automatically converts
+free-tier exhaustion into billable usage, the upstream provider may still charge that account.
 
-If a provider account automatically bills after a free allowance is exhausted, the provider
-may still charge that account. For strict zero-cost operation, configure provider accounts so
-paid overages are disabled or otherwise impossible where supported.
+For strict zero-cost operation, configure provider accounts/projects so paid overages are
+disabled or otherwise impossible where the provider supports that option.
 
-The Free Frontier guarantee is:
+## Phase 3: agent-compatible routing
 
-> **Free Frontier will not knowingly route a request to paid inference in v0.1.**
+Phase 3 adds capability-aware routing and OpenAI-compatible streaming/tool behavior on top of
+Phase 2 fallback and cooldowns.
 
-## Phase 2: resilient free-only routing
+Each route explicitly declares capabilities such as:
 
-Phase 2 currently implements:
+```toml
+capabilities = ["streaming", "tools", "structured_output"]
+```
 
-- typed TOML configuration
-- one public logical model: `free-frontier`
-- multiple ordered physical routes
-- explicit `enabled` and `free` route eligibility
-- configurable global cooldown duration
-- optional per-route cooldown duration
-- rate-limit fallback
-- fallback for selected temporary 5xx/timeout failures
-- fallback for upstream model-not-found / route-unavailable failures
-- provider `Retry-After` support when it extends the configured cooldown
-- automatic cooldown expiry and route re-eligibility
-- clean `503 all_routes_unavailable` behavior
-- strict skipping of paid/ineligible routes
-- LiteLLM as the provider-normalization transport
-- non-streaming `POST /v1/chat/completions`
-- `GET /v1/models`
-- deterministic fake-upstream tests that consume no provider quota
+Free Frontier infers requirements from each request. For example:
 
-Still intentionally deferred:
+- `stream = true` requires `streaming`
+- `tools`, `tool_choice`, legacy `functions`, or `function_call` require `tools`
+- JSON/JSON-schema `response_format` requires `structured_output`
+- OpenAI-style image content requires `vision`
 
-- capability-aware route filtering, streaming, and tools (Phase 3)
-- read-only status/observability API (Phase 4)
-- Hermes/Cline integration hardening and packaging (Phase 5)
+A route missing any required capability is skipped before an upstream request is attempted.
+Unknown support is treated conservatively.
+
+### Streaming fallback boundary
+
+For streaming requests, Free Frontier may transparently fall back **before the first upstream
+chunk is emitted**.
+
+Once the first chunk has committed the response to a physical route, Free Frontier never
+splices the remainder of the answer from another model. A post-commit upstream stream failure
+terminates that stream instead of mixing model outputs.
 
 ## Setup
-
-Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/robpodosek/free-frontier.git
 cd free-frontier
 uv sync
-```
-
-Create local runtime files:
-
-```bash
 cp free-frontier.toml.example free-frontier.toml
 cp .env.example .env
 ```
@@ -157,15 +102,13 @@ cp .env.example .env
 The checked-in example starts with Gemini enabled and Groq present but disabled:
 
 ```toml
-[routing]
-default_cooldown_seconds = 60
-
 [routes."gemini-flash"]
 provider = "gemini"
 model = "gemini/gemini-3.6-flash"
 enabled = true
 free = true
 api_key_env = "GEMINI_API_KEY"
+capabilities = ["streaming", "tools", "structured_output"]
 
 [routes."groq-gpt-oss"]
 provider = "groq"
@@ -173,15 +116,14 @@ model = "groq/openai/gpt-oss-120b"
 enabled = false
 free = true
 api_key_env = "GROQ_API_KEY"
+capabilities = ["streaming", "tools"]
 
 [logical_models."free-frontier"]
 routes = ["gemini-flash", "groq-gpt-oss"]
 ```
 
-To use the Groq fallback, add `GROQ_API_KEY` to `.env` and set its route to `enabled = true`.
-
-Provider model availability and free-tier terms can change. Verify configured routes against
-current provider documentation and your own account billing settings.
+Provider capabilities, model availability, rate limits, and free-tier terms can change. Keep
+route metadata aligned with current provider behavior and your own account billing settings.
 
 ## Run
 
@@ -195,13 +137,13 @@ Default listener:
 http://127.0.0.1:4000
 ```
 
-List public logical models:
+List logical models:
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/models | python -m json.tool
 ```
 
-Send a non-streaming request:
+Non-streaming completion:
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/chat/completions \
@@ -213,8 +155,20 @@ curl -s http://127.0.0.1:4000/v1/chat/completions \
   }' | python -m json.tool
 ```
 
-See [`docs/PHASE2-SMOKE.md`](docs/PHASE2-SMOKE.md) for a controlled real-provider fallback
-smoke test.
+Streaming completion:
+
+```bash
+curl -N http://127.0.0.1:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "free-frontier",
+    "messages": [{"role": "user", "content": "Count from one to five."}],
+    "stream": true
+  }'
+```
+
+See [`docs/PHASE3-SMOKE.md`](docs/PHASE3-SMOKE.md) for streaming, tool-calling, capability
+filtering, and pre-stream fallback smoke tests.
 
 ## Development
 
@@ -225,7 +179,7 @@ uv run python -m compileall src
 git diff --check
 ```
 
-Normal automated tests use fake transports and do not consume provider quota.
+The deterministic test suite uses fake transports and consumes no provider quota.
 
 ## Architecture and roadmap
 

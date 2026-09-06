@@ -4,7 +4,8 @@
 
 Free Frontier is a local, OpenAI-compatible model-routing proxy.
 
-Its job is to expose a stable logical model such as `free-frontier` and transparently select among configured free-tier provider/model routes.
+Its job is to expose a stable logical model such as `free-frontier` and transparently select
+among configured free-tier provider/model routes.
 
 Free Frontier is **not** an agent framework.
 
@@ -34,9 +35,10 @@ Do not add functionality for:
 - multi-agent coordination
 - IDE-specific workflow logic
 
-Hermes, Cline, Codex-based tools, Continue, Open WebUI, custom applications, and similar systems are consumers of Free Frontier. They are not components of Free Frontier.
+Hermes, Cline, Continue, Open WebUI, custom applications, and similar systems are consumers of
+Free Frontier. They are not components of Free Frontier.
 
-The test for scope is:
+The scope test is:
 
 > Does the proxy need this information or behavior to select and serve an LLM request?
 
@@ -44,156 +46,145 @@ If the answer is no, it probably does not belong in the core project.
 
 ## v0.1 public contract
 
-Normal clients should be able to configure a stable OpenAI-compatible base URL and request the logical model:
+Normal clients configure one OpenAI-compatible base URL and request:
 
 ```text
 free-frontier
 ```
 
-Physical provider/model identities are internal routing details and must not be required in normal consumer configuration.
-
-The system must support transparent fallback among eligible routes.
+Physical provider/model identities are internal routing details. Clients must not be required
+to select them.
 
 ## Free-only invariant
 
 v0.1 is free-only.
 
-The implementation must never knowingly select paid inference.
+The implementation must never knowingly select paid inference. If all eligible free routes
+are unavailable or incompatible, fail cleanly instead of selecting a paid route.
 
-If all eligible free routes are unavailable, fail cleanly instead of selecting a paid route.
+Do not add a paid fallback, automatic credit usage, or temporary paid escape hatch in v0.1.
 
-Do not add a paid fallback, automatic credit usage, or "temporary" paid escape hatch in v0.1.
-
-Account-level billing remains outside Free Frontier's control. Documentation must not claim the software can override billing settings attached to user-supplied provider credentials.
+Account-level billing remains outside Free Frontier's control. Documentation must not claim
+that Free Frontier can override billing settings attached to user-supplied credentials.
 
 ## API keys
 
-Users supply credentials for the providers they choose to enable.
+Users supply credentials for providers they choose to enable.
 
-Do not hard-code credentials.
+Do not:
 
-Do not log credential values.
-
-Do not require credentials for providers that the user has not enabled.
-
-Keep provider credentials behind the proxy so clients do not need upstream provider keys.
+- hard-code credentials
+- log credential values
+- expose provider credentials through API responses
+- require credentials for disabled routes
 
 ## Routing ownership
 
-Free Frontier should own:
+Free Frontier owns:
 
 - logical-model resolution
-- route eligibility
-- preference/priority policy
-- health/cooldown state
+- route eligibility and ordering
+- free-only enforcement
+- cooldown state
 - fallback decisions
+- request capability extraction
 - capability filtering
-- free-only eligibility policy
+- the streaming commit boundary
 - routing observability
 
-Provider libraries such as LiteLLM may own transport and normalization details, but they must not become the source of truth for Free Frontier's product semantics when doing so would violate the specification.
+LiteLLM owns provider transport/normalization details where useful, but it does not define Free
+Frontier's product semantics.
+
+## Capability policy
+
+Route capabilities are explicit configuration metadata.
+
+Unknown support is unsupported until configured otherwise.
+
+A request must never be sent to a route missing a capability the request requires. Current
+Phase 3 capability names are:
+
+- `streaming`
+- `tools`
+- `structured_output`
+- `vision`
+
+Capability declarations should be conservative. If a provider supports a feature only under
+certain combinations or modes, do not claim broader support than Free Frontier can safely
+route today.
+
+## Streaming invariant
+
+Transparent fallback is allowed only before the first upstream stream chunk commits the
+response.
+
+After the first upstream chunk has been accepted:
+
+- keep the request bound to that route
+- never splice remaining output from a fallback model
+- terminate the stream if the committed upstream fails
+- record the post-commit failure in logs without attempting fallback
 
 ## Failure and cooldown behavior
 
-Temporary failures such as rate limits, capacity errors, and appropriate service failures should make a route temporarily ineligible according to policy.
+Fallback-worthy failures include configured temporary failures such as rate limits, selected
+service errors, timeouts, and stale model/route-not-found responses.
 
-While a route is cooling down, new requests should avoid it rather than repeatedly hammer it.
+While a route is cooling down, new requests should skip it. After cooldown expiry, the route
+must automatically become eligible again unless another rule prevents selection.
 
-After the cooldown expires, the route becomes eligible again automatically unless another health condition prevents it.
-
-Fallback must be transparent to the caller before response streaming has begun.
-
-Do not attempt to splice together partially streamed responses from different upstream models in v0.1.
-
-## Capability safety
-
-Do not select an otherwise healthy route if it cannot satisfy the request.
-
-Capability checks may include:
-
-- streaming
-- tools/function calling
-- structured output
-- context-window requirements
-- modalities such as vision when supported
-
-Unknown capability support should be treated conservatively rather than guessed.
+Non-retryable failures must not be silently converted into fallback.
 
 ## Observability boundary
 
-Monitoring data belongs in the core. Monitoring presentation does not.
+Monitoring data belongs in the core; monitoring presentation does not.
 
-The core may emit structured events/state and expose read-only status/health information.
+Routing behavior must be inspectable, but presentation is not part of routing correctness.
 
-A future dashboard, CLI UI, or VS Code extension should consume that information as a client.
+Keep route decision logs safe and credential-free. A future dashboard or VS Code extension
+must consume status/observability interfaces rather than own routing decisions.
 
-Never make routing correctness depend on a dashboard process, Rich terminal UI, VS Code extension, or other presentation layer.
+## Current phase
 
-## Implementation approach
+Phase 0, Phase 1, and Phase 2 acceptance gates have passed.
 
-Prefer small, explicit components with typed interfaces.
+Current implementation target: **Phase 3 - capability-aware routing, streaming, and tools.**
 
-Initial implementation target:
+Do not start Phase 4 status/dashboard work until Phase 3 acceptance tests and real smoke tests
+pass.
+
+## Testing requirements
+
+Before considering a change complete, run:
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run python -m compileall src
+git diff --check
+```
+
+Tests should use fake transports whenever possible so normal test runs consume no provider
+quota.
+
+Phase 3 must prove at minimum:
+
+1. tools requests skip routes without `tools`
+2. streaming requests skip routes without `streaming`
+3. structured-output requests skip routes without `structured_output`
+4. a compatible route streams through `free-frontier`
+5. a failure before the first stream chunk can transparently fall back
+6. a failure after the first stream chunk never splices another route
+7. OpenAI-compatible tool calls pass through the logical-model abstraction
+8. physical model names remain hidden from the required client configuration
+
+## Code style
 
 - Python 3.12+
-- `src/` package layout
-- tests under `tests/`
-- LiteLLM where it reduces provider-specific transport/normalization work
-
-Do not build a generalized plugin system, daemon mesh, database-backed control plane, web dashboard, or workflow engine for v0.1.
-
-## Phase discipline
-
-Current implementation target: **Phase 2 — free-only routing, fallback, and cooldowns**.
-
-Work only on the current phase unless the user explicitly expands scope.
-
-`docs/ROADMAP.md` defines phase acceptance gates.
-
-Do not implement later-phase features "while you're here" if they materially broaden the change.
-
-Every phase should leave the repository testable and understandable.
-
-## Testing expectations
-
-Routing logic must be testable without consuming real provider quota.
-
-Prefer fake/mock upstreams for deterministic tests of:
-
-- route selection
-- rate-limit fallback
-- cooldown skipping
-- cooldown expiry
-- capability filtering
-- all-routes-unavailable behavior
-- free-only enforcement
-- streaming behavior
-- tool-call behavior
-
-Real-provider smoke tests may exist separately and must not be required for the normal unit test suite.
-
-## Configuration rules
-
-Configuration must be validated at startup.
-
-Reject invalid references such as fallbacks/routes that point to nonexistent route IDs.
-
-Reject ambiguous or unsafe cost-policy configuration.
-
-Do not silently ignore malformed routing configuration.
-
-## Documentation rules
-
-Do not hard-code claims about provider quotas, exact free-tier limits, or currently available model IDs unless those claims have been verified against current provider documentation.
-
-Provider offerings change frequently. Prefer configuration and capability metadata over marketing copy embedded in code.
-
-## Definition of done for a phase
-
-Before declaring a phase complete:
-
-1. run its automated tests
-2. run formatting/linting configured for the repository
-3. confirm the phase acceptance gate in `docs/ROADMAP.md`
-4. summarize files changed and design decisions
-5. list any spec requirement that remains intentionally unimplemented because it belongs to a later phase
+- keep dependencies minimal
+- prefer typed, explicit data models
+- keep provider-specific behavior behind transport interfaces
+- keep policy in Free Frontier routing code
+- keep errors actionable without leaking secrets
+- do not leave trailing whitespace
+- always run `git diff --check` before handoff
