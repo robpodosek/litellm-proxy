@@ -15,6 +15,14 @@ class ServerConfig(BaseModel):
     port: int = Field(default=4000, ge=1, le=65535)
 
 
+class RoutingConfig(BaseModel):
+    """Global Phase 2 routing policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default_cooldown_seconds: float = Field(default=60.0, ge=0.0, le=86400.0)
+
+
 class RouteDefinition(BaseModel):
     """One concrete provider/model route.
 
@@ -30,6 +38,7 @@ class RouteDefinition(BaseModel):
     free: bool
     api_key_env: str | None = None
     api_base: str | None = None
+    cooldown_seconds: float | None = Field(default=None, ge=0.0, le=86400.0)
     litellm_params: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -49,35 +58,42 @@ class LogicalModelDefinition(BaseModel):
 
     routes: list[str] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_route_order(self) -> LogicalModelDefinition:
+        if len(self.routes) != len(set(self.routes)):
+            raise ValueError("logical model routes must not contain duplicates")
+        return self
+
 
 class AppConfig(BaseModel):
-    """Validated Free Frontier configuration for Phase 1."""
+    """Validated Free Frontier configuration for Phase 2."""
 
     model_config = ConfigDict(extra="forbid")
 
     server: ServerConfig = Field(default_factory=ServerConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     routes: dict[str, RouteDefinition]
     logical_models: dict[str, LogicalModelDefinition]
 
     @model_validator(mode="after")
-    def validate_phase1_contract(self) -> AppConfig:
+    def validate_phase2_contract(self) -> AppConfig:
         logical = self.logical_models.get("free-frontier")
         if logical is None:
             raise ValueError("logical_models must define 'free-frontier'")
 
-        # Phase 1 intentionally proves the abstraction with one route. Phase 2 removes
-        # this restriction and adds ordered selection, fallback, and cooldowns.
-        if len(logical.routes) != 1:
-            raise ValueError("Phase 1 requires 'free-frontier' to reference exactly one route")
+        for route_id in logical.routes:
+            if route_id not in self.routes:
+                raise ValueError(
+                    f"logical model 'free-frontier' references unknown route '{route_id}'"
+                )
 
-        route_id = logical.routes[0]
-        route = self.routes.get(route_id)
-        if route is None:
-            raise ValueError(f"logical model 'free-frontier' references unknown route '{route_id}'")
-        if not route.enabled:
-            raise ValueError(f"route '{route_id}' referenced by 'free-frontier' is disabled")
-        if not route.free:
-            raise ValueError(f"route '{route_id}' is not eligible under the v0.1 free-only policy")
+        if not any(
+            self.routes[route_id].enabled and self.routes[route_id].free
+            for route_id in logical.routes
+        ):
+            raise ValueError(
+                "logical model 'free-frontier' must reference at least one enabled free route"
+            )
         return self
 
 

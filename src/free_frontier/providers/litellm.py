@@ -1,10 +1,61 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from free_frontier.models import PhysicalRoute
-from free_frontier.providers.base import TransportError
+from free_frontier.providers.base import FailureKind, TransportError
+
+_TEMPORARY_STATUS_CODES = {408, 425, 500, 502, 503, 504, 529}
+_TEMPORARY_EXCEPTION_NAMES = {
+    "APIConnectionError",
+    "InternalServerError",
+    "ServiceUnavailableError",
+    "Timeout",
+    "TimeoutError",
+}
+_ROUTE_UNAVAILABLE_STATUS_CODES = {404}
+
+
+def _status_code(exc: Exception) -> int | None:
+    value = getattr(exc, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    response = getattr(exc, "response", None)
+    headers: Mapping[str, Any] | None = getattr(response, "headers", None)
+    if headers is None:
+        possible_headers = getattr(exc, "headers", None)
+        if isinstance(possible_headers, Mapping):
+            headers = possible_headers
+    if headers is None:
+        return None
+
+    value = headers.get("retry-after") or headers.get("Retry-After")
+    if value is None:
+        return None
+
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, seconds)
+
+
+def _classify_exception(exc: Exception) -> tuple[FailureKind, int | None, float | None]:
+    status = _status_code(exc)
+    name = type(exc).__name__
+    retry_after = _retry_after_seconds(exc)
+
+    if status == 429 or name == "RateLimitError":
+        return FailureKind.RATE_LIMIT, status, retry_after
+    if status in _ROUTE_UNAVAILABLE_STATUS_CODES or name == "NotFoundError":
+        return FailureKind.ROUTE_UNAVAILABLE, status, retry_after
+    if status in _TEMPORARY_STATUS_CODES or name in _TEMPORARY_EXCEPTION_NAMES:
+        return FailureKind.TEMPORARY, status, retry_after
+    return FailureKind.NON_RETRYABLE, status, retry_after
 
 
 class LiteLLMTransport:
@@ -15,8 +66,6 @@ class LiteLLMTransport:
         route: PhysicalRoute,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        # Import at call time so deterministic unit tests can use fake transports without
-        # importing or initializing LiteLLM/provider integrations.
         try:
             import litellm
         except ImportError as exc:  # pragma: no cover - packaging/runtime guard
@@ -28,27 +77,25 @@ class LiteLLMTransport:
             "model": route.model,
             "stream": False,
         }
-
         if route.api_key_env:
             api_key = os.getenv(route.api_key_env)
             if not api_key:
-                # Startup validation should catch this. Keep a second safe check here for
-                # callers that construct application objects directly.
                 raise TransportError(
                     f"Credential environment variable {route.api_key_env} is not set"
                 )
             kwargs["api_key"] = api_key
-
         if route.api_base:
             kwargs["api_base"] = route.api_base
 
         try:
             response = await litellm.acompletion(**kwargs)
         except Exception as exc:
-            # Phase 2 will classify errors for fallback/cooldown policy. Phase 1 has one
-            # route, so normalize the transport failure without leaking request secrets.
+            kind, status, retry_after = _classify_exception(exc)
             raise TransportError(
-                f"Upstream route '{route.id}' failed via provider '{route.provider}'"
+                f"Upstream route '{route.id}' failed via provider '{route.provider}'",
+                kind=kind,
+                status_code=status,
+                retry_after_seconds=retry_after,
             ) from exc
 
         if isinstance(response, dict):

@@ -1,162 +1,179 @@
-# Free Frontier Architecture
+# Free Frontier architecture
 
-This document describes the intended v0.1 component boundaries. It is subordinate to `SPEC-v0.1.md`.
+## Architectural position
 
-## System position
+Free Frontier sits below agent frameworks and other AI clients.
 
 ```text
-AI client / agent framework
-          │
-          │ OpenAI-compatible request
-          ▼
-┌──────────────────────────────┐
-│        Free Frontier         │
-│                              │
-│  API                         │
-│   ↓                          │
-│  logical model resolution    │
-│   ↓                          │
-│  capability + cost filter    │
-│   ↓                          │
-│  routing policy              │
-│   ↓                          │
-│  cooldown / health state     │
-│   ↓                          │
-│  provider transport          │
-└──────────────┬───────────────┘
-               │
-       ┌───────┼────────┐
-       ▼       ▼        ▼
-   Provider  Provider  Local
-      A         B      model
+Hermes / Cline / OpenAI-compatible client
+                  │
+                  ▼
+           Free Frontier API
+                  │
+                  ▼
+          logical model router
+                  │
+         ┌────────┼────────┐
+         ▼        ▼        ▼
+      Route A  Route B  Route C
+         │        │        │
+         └────────┼────────┘
+                  ▼
+             LiteLLM
+                  │
+                  ▼
+        upstream providers
 ```
 
-Free Frontier sits below clients. It should not contain agent-specific behavior.
+Free Frontier does not understand agent plans, repositories, coding tasks, or workflow state.
+Its responsibility is inference routing behind a stable logical model interface.
 
-## Planned core components
+## Phase 2 component boundaries
 
-The exact module names can evolve, but the responsibilities should stay separate.
-
-### API layer
+### API layer: `app.py`
 
 Responsibilities:
 
 - expose OpenAI-compatible endpoints
-- parse/validate incoming requests
-- preserve the logical model abstraction
-- stream normalized responses
-- map terminal routing failures to clear API errors
+- accept the public `free-frontier` logical model
+- preserve unknown compatible request parameters
+- reject streaming until Phase 3
+- map terminal routing failures to safe API errors
 
-Must not own provider priority or cooldown policy.
+It does not choose provider order or cooldown durations.
 
-### Configuration
-
-Responsibilities:
-
-- load user configuration
-- validate logical models and route definitions
-- resolve enabled providers and required credentials
-- expose immutable/typed configuration to the router
-
-Configuration should fail early when references are invalid.
-
-### Route registry
-
-A route represents one concrete upstream provider/model target plus routing metadata.
-
-Likely metadata includes:
-
-- stable route ID
-- provider identifier
-- provider model identifier
-- enabled state
-- free-only eligibility declaration
-- priority/preference
-- capabilities
-- provider-specific transport options
-
-Physical route IDs are internal implementation details and are not the normal model names used by clients.
-
-### Router / policy
+### Configuration: `config.py` + `models.py`
 
 Responsibilities:
 
-- resolve a logical model to candidate routes
-- filter candidates by free-only policy
-- filter by request capabilities
-- filter routes that are temporarily unavailable
-- order/select candidates according to policy
-- attempt transparent fallback before streaming begins
+- load TOML and `.env`
+- validate route references
+- preserve ordered route preference
+- validate `enabled` and `free` eligibility metadata
+- load configurable cooldown policy
+- require credentials only for enabled free routes that may be selected
+- keep credential values out of typed configuration objects
 
-The router should be deterministic under test fixtures.
+Invalid route references fail at startup.
 
-### Cooldown / health state
-
-Responsibilities:
-
-- classify temporary failures that should cool a route
-- record cooldown start/expiry
-- answer whether a route is currently eligible
-- return expired routes to eligibility automatically
-
-This state should be independent of any UI.
-
-### Provider transport
+### Router: `routing.py`
 
 Responsibilities:
 
-- invoke upstream providers
-- normalize request/response behavior
-- provide streaming/tool-call compatibility where the upstream supports it
+- resolve a logical model to its ordered candidate routes
+- enforce the v0.1 free-only invariant
+- skip disabled and cooling routes
+- attempt fallback after normalized fallback-worthy failures
+- return the first successful normalized response
+- keep physical model identity hidden from normal clients
+- return a terminal all-routes-unavailable condition when no eligible route succeeds
 
-LiteLLM is the initial intended transport/normalization dependency unless implementation work reveals a concrete reason to replace or isolate parts of it.
+Route order in the logical model definition is deterministic preference order.
 
-Free Frontier should not duplicate provider-specific plumbing merely to avoid a dependency.
-
-### Observability
+### Cooldown state: `cooldowns.py`
 
 Responsibilities:
 
-- emit structured routing events
-- expose safe read-only health/status data
-- record enough information to explain routing decisions
+- record per-route cooldown expiry using a monotonic clock
+- answer whether a route is currently cooling down
+- make expired routes eligible automatically
 
-Must never expose API secrets.
+The tracker is intentionally headless and in-memory in Phase 2. It exposes no dashboard or
+status API. Phase 4 will add read-only observability around routing state without making UI
+code part of the routing path.
 
-Must never be required for routing correctness.
+### Provider transport: `providers/`
 
-## Planned source layout
+Responsibilities:
 
-Phase 0 establishes only a minimal importable package. Later phases may converge toward:
+- invoke upstream providers through LiteLLM
+- keep API-key values behind the proxy
+- normalize provider failures into safe `TransportError` categories
+- preserve provider `Retry-After` hints when available
+- normalize provider responses into OpenAI-style data structures
+
+LiteLLM handles provider-specific API differences. Free Frontier owns routing policy.
+
+### Failure classification
+
+Phase 2 distinguishes:
+
+- `rate_limit`: fallback-worthy; enters cooldown
+- `temporary`: selected timeouts/5xx/capacity failures; fallback-worthy; enters cooldown
+- `route_unavailable`: upstream model-not-found/route-unavailable failures; fallback-worthy;
+  enters cooldown
+- `non_retryable`: terminal for the request; does not silently fall back
+
+Capability-specific incompatibility is intentionally deferred to Phase 3.
+
+## Free-only invariant
+
+A route is eligible only when:
+
+```text
+enabled == true
+AND
+free == true
+AND
+not cooling down
+```
+
+A configured route with `free = false` is never selected in v0.1. If no eligible free route
+succeeds, the router fails rather than selecting paid inference.
+
+This software cannot override billing rules attached to the provider account behind an API
+key, so strict zero-cost users must also configure their provider accounts appropriately.
+
+## Cooldown policy
+
+Global default:
+
+```toml
+[routing]
+default_cooldown_seconds = 60
+```
+
+A route may override it:
+
+```toml
+[routes."some-route"]
+cooldown_seconds = 120
+```
+
+If an upstream error supplies a numeric `Retry-After`, Phase 2 uses the longer of the
+configured cooldown and the provider hint. This avoids retrying earlier than either policy
+allows.
+
+## Current source layout
 
 ```text
 src/free_frontier/
 ├── __init__.py
+├── __main__.py
 ├── app.py
+├── cli.py
 ├── config.py
+├── cooldowns.py
 ├── models.py
-├── api/
-│   ├── openai.py
-│   └── status.py
-├── routing/
-│   ├── router.py
-│   ├── policy.py
-│   ├── capabilities.py
-│   └── cooldowns.py
-├── providers/
-│   ├── base.py
-│   ├── litellm.py
-│   └── registry.py
-└── observability/
-    ├── events.py
-    └── logging.py
+├── routing.py
+└── providers/
+    ├── __init__.py
+    ├── base.py
+    └── litellm.py
 ```
 
-Do not create all of these modules merely to match the diagram. Create them when the phase being implemented requires the responsibility.
+Do not split these responsibilities into more modules merely to match a future diagram.
+Create new boundaries when later phases actually require them.
 
-## Future presentation layers
+## Later phases
 
-A later dashboard or VS Code extension should communicate with stable, read-only Free Frontier status/health interfaces.
+Phase 3 adds capability-aware selection, streaming, and tools.
+
+Phase 4 adds headless observability and read-only status APIs.
+
+Phase 5 hardens real consumer/provider integration and packaging.
+
+A future dashboard or VS Code extension should consume stable status interfaces as a client:
 
 ```text
                     ┌── CLI/status client
@@ -166,4 +183,4 @@ Free Frontier Core ─┼── web dashboard
                     └── VS Code extension
 ```
 
-Those presentation layers should remain replaceable. The router must operate correctly when none of them are running.
+Routing correctness must not depend on any presentation layer being present.

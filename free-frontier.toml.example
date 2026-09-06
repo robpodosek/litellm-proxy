@@ -1,9 +1,15 @@
-# Phase 1 configuration: one logical model -> one physical free route.
-# Phase 2 will add multiple routes, fallback, and cooldowns.
+# Phase 2 example configuration.
+#
+# Route order under logical_models."free-frontier" is preference order.
+# Only routes with enabled=true AND free=true are eligible for v0.1 routing.
+# Disabled routes do not require credentials at startup.
 
 [server]
 host = "127.0.0.1"
 port = 4000
+
+[routing]
+default_cooldown_seconds = 60
 
 [routes."gemini-flash"]
 provider = "gemini"
@@ -12,5 +18,13 @@ enabled = true
 free = true
 api_key_env = "GEMINI_API_KEY"
 
+# Enable this route after adding GROQ_API_KEY to .env.
+[routes."groq-gpt-oss"]
+provider = "groq"
+model = "groq/openai/gpt-oss-120b"
+enabled = false
+free = true
+api_key_env = "GROQ_API_KEY"
+
 [logical_models."free-frontier"]
-routes = ["gemini-flash"]
+routes = ["gemini-flash", "groq-gpt-oss"]

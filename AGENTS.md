@@ -144,6 +144,8 @@ Do not build a generalized plugin system, daemon mesh, database-backed control p
 
 ## Phase discipline
 
+Current implementation target: **Phase 2 — free-only routing, fallback, and cooldowns**.
+
 Work only on the current phase unless the user explicitly expands scope.
 
 `docs/ROADMAP.md` defines phase acceptance gates.

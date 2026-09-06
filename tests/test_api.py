@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from free_frontier.app import create_app
 from free_frontier.models import AppConfig, PhysicalRoute
-from free_frontier.providers.base import TransportError
+from free_frontier.providers.base import FailureKind, TransportError
 
 
 class FakeTransport:
@@ -138,3 +138,35 @@ def test_single_upstream_failure_returns_clean_502_without_fallback() -> None:
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "upstream_error"
     assert len(transport.calls) == 1
+
+
+def test_all_fallback_worthy_routes_unavailable_returns_clean_503() -> None:
+    class TemporaryFailTransport:
+        async def complete(
+            self, route: PhysicalRoute, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            raise TransportError(
+                "temporary",
+                kind=FailureKind.TEMPORARY,
+                status_code=503,
+            )
+
+    raw = {
+        "routes": {
+            "a": {"provider": "a", "model": "a/model", "enabled": True, "free": True},
+            "b": {"provider": "b", "model": "b/model", "enabled": True, "free": True},
+        },
+        "logical_models": {"free-frontier": {"routes": ["a", "b"]}},
+    }
+    client = TestClient(create_app(AppConfig.model_validate(raw), TemporaryFailTransport()))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "free-frontier",
+            "messages": [{"role": "user", "content": "ping"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "all_routes_unavailable"

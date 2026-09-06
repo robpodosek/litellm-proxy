@@ -10,11 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from free_frontier.config import load_config
 from free_frontier.models import AppConfig
 from free_frontier.providers import CompletionTransport, LiteLLMTransport, TransportError
-from free_frontier.routing import Phase1Router, UnknownLogicalModel
+from free_frontier.routing import AllRoutesUnavailable, Router, UnknownLogicalModel
 
 
 class ChatCompletionRequest(BaseModel):
-    """Phase 1 subset of the OpenAI chat-completions request shape.
+    """Phase 2 subset of the OpenAI chat-completions request shape.
 
     Unknown OpenAI-compatible generation parameters are preserved and forwarded. Streaming
     is explicitly deferred to Phase 3 and rejected rather than silently mishandled.
@@ -54,11 +54,11 @@ def create_app(
 ) -> FastAPI:
     resolved_config = config or load_config()
     resolved_transport = transport or LiteLLMTransport()
-    router = Phase1Router(resolved_config, resolved_transport)
+    router = Router(resolved_config, resolved_transport)
 
     app = FastAPI(
         title="Free Frontier",
-        version="0.1.0a1",
+        version="0.1.0a2",
         description="OpenAI-compatible free-tier LLM routing proxy.",
     )
 
@@ -83,15 +83,13 @@ def create_app(
         if request.stream:
             return _error(
                 400,
-                "Streaming is not implemented in Phase 1; retry with stream=false.",
+                "Streaming is not implemented until Phase 3; retry with stream=false.",
                 error_type="invalid_request_error",
                 code="unsupported_feature",
                 param="stream",
             )
 
         try:
-            # Exclude the logical model name. The router resolves it to the internal physical
-            # route and the transport receives only provider-normalized completion arguments.
             payload = request.model_dump(exclude={"model"}, exclude_none=True)
             payload["stream"] = False
             return await router.complete(request.model, payload)
@@ -103,10 +101,17 @@ def create_app(
                 code="model_not_found",
                 param="model",
             )
+        except AllRoutesUnavailable:
+            return _error(
+                503,
+                "All eligible free routes are temporarily unavailable.",
+                error_type="api_error",
+                code="all_routes_unavailable",
+            )
         except TransportError:
             return _error(
                 502,
-                "The configured upstream route failed. Phase 1 has no fallback route.",
+                "An upstream route failed with a non-retryable error.",
                 error_type="api_error",
                 code="upstream_error",
             )
