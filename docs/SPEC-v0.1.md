@@ -217,6 +217,8 @@ Capability metadata/checks may include:
 
 Unknown support should be handled conservatively. The router should not guess that a route supports a required capability.
 
+A route may also declare combinations of individually supported capabilities that cannot safely be used together. Free Frontier must reject those combinations before sending inference to that route.
+
 ## 11. OpenAI-compatible API
 
 The primary external interface is OpenAI-compatible.
@@ -226,6 +228,7 @@ At minimum, v0.1 should support the endpoints and request behavior necessary for
 ```text
 /v1/chat/completions
 /v1/models
+/v1/models/{model}
 ```
 
 Where supported by eligible upstream routes, v0.1 should preserve compatible behavior for:
@@ -382,3 +385,19 @@ Whenever a proposed feature requires Free Frontier to understand what an agent o
 > Does the proxy actually need this to select and serve an eligible LLM route?
 
 If the answer is no, it does not belong in the Free Frontier core.
+
+
+## 23. Client compatibility hardening
+
+Free Frontier v0.1 should provide request correlation and honest discovery behavior for real
+OpenAI-compatible clients. Every HTTP response should include `X-Request-ID`, and route-decision
+logs should include the same ID. `GET /v1/models/{model}` should return metadata for logical
+models without exposing physical routes.
+
+Free Frontier must not fake unrelated backend APIs merely to satisfy client auto-detection. A
+client probing Ollama or another provider-specific endpoint may receive `404` when that API is
+not implemented.
+
+When all compatible free routes are temporarily unavailable and cooldown timing is known, a
+final `503 all_routes_unavailable` response should expose a standard `Retry-After` value without
+revealing provider credentials or unsafe internal exception text.

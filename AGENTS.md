@@ -192,3 +192,14 @@ Phase 5 must prove at minimum:
 - keep errors actionable without leaking secrets
 - do not leave trailing whitespace
 - always run `git diff --check` before handoff
+
+
+## Phase 5 hardening invariants
+
+- Preserve `X-Request-ID` correlation from HTTP response through every route-decision log line.
+- Do not implement fake Ollama or other provider-specific discovery endpoints.
+- Treat incompatible capability combinations as pre-routing policy, not as errors to discover by
+  consuming upstream inference.
+- Keep `Retry-After` derived only from known route cooldown state.
+- Normalize known provider-only response metadata without stripping OpenAI-compatible tool,
+  streaming, usage, or structured-output fields.

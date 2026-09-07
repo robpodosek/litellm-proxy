@@ -80,3 +80,24 @@ git --no-pager diff --check
 ```
 
 Then complete `docs/RELEASE-CHECKLIST.md`.
+
+## Hardening checks
+
+Model-detail discovery:
+
+```bash
+curl -i http://127.0.0.1:4000/v1/models/free-frontier
+```
+
+Confirm the response contains `X-Request-ID` and the body names only `free-frontier`.
+
+When testing an exhausted free pool, inspect the final `503` headers:
+
+```bash
+curl -i http://127.0.0.1:4000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"free-frontier","messages":[{"role":"user","content":"ping"}]}'
+```
+
+If compatible routes are cooling down with known expiry, the response should include
+`Retry-After`. The corresponding route logs should all carry the same `request=...` value.

@@ -20,7 +20,11 @@ Verify the logical model is visible:
 curl -s http://127.0.0.1:4000/v1/models | python -m json.tool
 ```
 
-The model list should contain `free-frontier`.
+The model list should contain `free-frontier`. Free Frontier also supports:
+
+```bash
+curl -s http://127.0.0.1:4000/v1/models/free-frontier | python -m json.tool
+```
 
 ## Interactive configuration
 
@@ -117,3 +121,15 @@ model:    free-frontier
 - https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/faq.md
 - https://github.com/NousResearch/hermes-agent/blob/main/website/docs/integrations/providers.md
 - https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/cli-commands.md
+
+## Hermes discovery probes
+
+Hermes may probe several backend-specific endpoints while identifying a custom model server.
+Free Frontier supports the OpenAI-compatible discovery paths it actually implements, including
+`/v1/models` and `/v1/models/free-frontier`. Probes for unrelated APIs such as Ollama's
+`/api/tags` or `/api/show` may return `404`. That is intentional and should not be treated as an
+inference failure if Hermes continues to use the configured OpenAI-compatible endpoint.
+
+For debugging, compare the response `X-Request-ID` with `request=...` in Free Frontier's routing
+logs. This prevents separate Hermes probes, retries, and model calls from being mistaken for one
+route sequence.

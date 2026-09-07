@@ -41,16 +41,20 @@ model = "groq/openai/gpt-oss-120b"
 enabled = false
 free = true
 api_key_env = "GROQ_API_KEY"
-capabilities = ["streaming", "tools"]
+capabilities = ["streaming", "tools", "structured_output"]
+incompatible_capability_combinations = [
+  ["structured_output", "streaming"],
+  ["structured_output", "tools"],
+]
 ```
 
 Groq's Free Plan limits currently include `openai/gpt-oss-120b` at 30 requests/minute,
 1,000 requests/day, 8,000 tokens/minute, and 200,000 tokens/day. Groq documents tool use,
 JSON Object Mode, and JSON Schema Mode for the model.
 
-The sample capability declaration remains conservative because provider feature combinations
-can have restrictions. Free Frontier live-smoke-tested normal completion, streaming fallback,
-and tool-call handling through this route on 2026-09-06.
+Free Frontier declares structured output as an individual capability but explicitly blocks
+known unsupported combinations with streaming and tool use. Free Frontier live-smoke-tested
+normal completion, streaming fallback, and tool-call handling through this route on 2026-09-06.
 
 Sources:
 

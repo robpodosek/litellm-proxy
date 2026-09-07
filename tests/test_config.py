@@ -134,3 +134,22 @@ routes = [\"enabled\", \"disabled\"]
     config = load_config(config_path, env_path=None)
 
     assert config.routes["disabled"].enabled is False
+
+
+def test_route_rejects_invalid_incompatible_capability_combination() -> None:
+    raw = {
+        "routes": {
+            "route": {
+                "provider": "provider",
+                "model": "provider/model",
+                "enabled": True,
+                "free": True,
+                "capabilities": ["tools"],
+                "incompatible_capability_combinations": [["tools", "structured_output"]],
+            }
+        },
+        "logical_models": {"free-frontier": {"routes": ["route"]}},
+    }
+
+    with pytest.raises(ValueError, match="may reference only declared capabilities"):
+        AppConfig.model_validate(raw)

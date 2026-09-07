@@ -41,6 +41,7 @@ class RouteDefinition(BaseModel):
     enabled: bool = True
     free: bool
     capabilities: frozenset[Capability] = Field(default_factory=frozenset)
+    incompatible_capability_combinations: tuple[frozenset[Capability], ...] = ()
     api_key_env: str | None = None
     api_base: str | None = None
     cooldown_seconds: float | None = Field(default=None, ge=0.0, le=86400.0)
@@ -55,6 +56,16 @@ class RouteDefinition(BaseModel):
         if forbidden:
             names = ", ".join(sorted(forbidden))
             raise ValueError(f"litellm_params cannot override protected fields: {names}")
+
+        for combination in self.incompatible_capability_combinations:
+            if len(combination) < 2:
+                raise ValueError(
+                    "incompatible capability combinations must contain at least two capabilities"
+                )
+            if not combination.issubset(self.capabilities):
+                raise ValueError(
+                    "incompatible capability combinations may reference only declared capabilities"
+                )
         return self
 
 
@@ -111,3 +122,4 @@ class PhysicalRoute:
     api_key_env: str | None
     api_base: str | None
     litellm_params: dict[str, Any]
+    incompatible_capability_combinations: tuple[frozenset[Capability], ...] = ()

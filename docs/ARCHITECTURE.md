@@ -42,6 +42,7 @@ Physical provider/model identities are internal route configuration.
 Owns the external HTTP surface:
 
 - `GET /v1/models`
+- `GET /v1/models/{model}`
 - `POST /v1/chat/completions`
 - `GET /health`
 - `GET /status`
@@ -246,3 +247,16 @@ it does not introduce a second routing implementation. The process binds `0.0.0.
 container only so Docker can forward traffic, while the checked-in compose file publishes port
 4000 on host `127.0.0.1` by default.
 
+
+## Request correlation
+
+The HTTP layer generates an `X-Request-ID` for every request. Inference calls pass that ID into
+the router, and every route decision log line includes it. Correlation is observability only; the
+ID never changes route eligibility, ordering, cooldowns, or fallback policy.
+
+## Response normalization
+
+The router removes only known top-level provider diagnostic fields when doing so is safe. Nested
+metadata that may be required to continue tool or reasoning flows is preserved until a provider-
+agnostic replacement is proven. Provider identity remains available through `/routes` and routing
+logs instead of relying on accidental diagnostic fields.

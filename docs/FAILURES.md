@@ -32,7 +32,9 @@ HTTP 503
 code: all_routes_unavailable
 ```
 
-It does not knowingly escape to a paid route.
+When Free Frontier knows when the next compatible route can leave cooldown, the response also
+contains a standard `Retry-After` header and `error.retry_after_seconds`. It does not knowingly
+escape to a paid route.
 
 ## Unsupported request capabilities
 
@@ -73,3 +75,22 @@ stream. Free Frontier never splices output from two physical models into one str
 6. verify provider model IDs and free-tier availability against current provider docs
 
 Do not put API-key values into bug reports or logs.
+
+## Client discovery probes
+
+Free Frontier implements the OpenAI-compatible model discovery endpoints it claims:
+
+```text
+GET /v1/models
+GET /v1/models/{model}
+```
+
+Some clients also probe Ollama or other backend-specific paths such as `/api/tags`, `/api/show`,
+`/props`, or `/version`. A `404` for an unrelated backend API is intentional. Free Frontier does
+not return fake success responses merely to silence auto-detection probes.
+
+## Correlating failures
+
+Every HTTP response carries `X-Request-ID`. Routing logs include the same value as `request=...`,
+so attempts, capability skips, upstream failures, cooldown skips, and fallback success can be
+followed even when a client issues several concurrent requests.

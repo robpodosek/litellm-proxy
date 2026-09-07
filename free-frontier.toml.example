@@ -21,17 +21,20 @@ api_key_env = "GEMINI_API_KEY"
 capabilities = ["streaming", "tools", "structured_output"]
 
 # Enable this route after adding GROQ_API_KEY to .env.
-# GPT-OSS 120B supports structured outputs too, but Groq currently documents
-# restrictions when structured outputs are combined with streaming/tool use.
-# Free Frontier keeps the declaration conservative until route-level capability
-# combination constraints exist.
+# GPT-OSS 120B supports structured output, streaming, and tools individually.
+# Groq currently documents restrictions when structured output is combined with
+# streaming or tool use, so those combinations are declared explicitly.
 [routes."groq-gpt-oss"]
 provider = "groq"
 model = "groq/openai/gpt-oss-120b"
 enabled = false
 free = true
 api_key_env = "GROQ_API_KEY"
-capabilities = ["streaming", "tools"]
+capabilities = ["streaming", "tools", "structured_output"]
+incompatible_capability_combinations = [
+  ["structured_output", "streaming"],
+  ["structured_output", "tools"],
+]
 
 [logical_models."free-frontier"]
 routes = ["gemini-flash", "groq-gpt-oss"]

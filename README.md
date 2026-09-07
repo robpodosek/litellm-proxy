@@ -1,6 +1,6 @@
 # Free Frontier
 
-**One endpoint. Multiple free LLM providers. Automatic fallback. No paid inference without explicit opt-in.**
+**One endpoint. Free models. FrFr.**
 
 Free Frontier is a local, OpenAI-compatible model proxy that gives AI clients one stable
 endpoint while transparently routing requests across the free-tier provider/model routes you
@@ -78,7 +78,9 @@ Free Frontier infers requirements from each request. For example:
 - OpenAI-style image content requires `vision`
 
 A route missing any required capability is skipped before an upstream request is attempted.
-Unknown support is treated conservatively.
+Routes can also declare incompatible capability combinations. For example, a route may support
+structured output and tools individually while rejecting a request that combines both. Unknown
+support is treated conservatively.
 
 ### Streaming fallback boundary
 
@@ -123,6 +125,22 @@ curl -s http://127.0.0.1:4000/routes | python -m json.tool
 A future dashboard or VS Code extension can consume these interfaces without becoming part of
 the routing core.
 
+
+## Phase 5 hardening
+
+Real-client integration adds a few compatibility guarantees:
+
+- every HTTP response includes an `X-Request-ID` correlation ID
+- routing logs include that same request ID across attempts, skips, failures, and fallbacks
+- final `503 all_routes_unavailable` responses include `Retry-After` when a known cooldown can
+  tell the client when the next compatible free route may become eligible
+- known top-level provider diagnostic fields are removed when safe, while metadata that may be required for tool/reasoning compatibility is preserved
+- `GET /v1/models/{model}` supports OpenAI-compatible model-detail discovery
+
+Some clients probe unrelated backend APIs such as Ollama endpoints while auto-detecting a
+server. Free Frontier intentionally returns `404` for APIs it does not implement instead of
+pretending to be another backend.
+
 ## Setup
 
 ```bash
@@ -150,7 +168,11 @@ model = "groq/openai/gpt-oss-120b"
 enabled = false
 free = true
 api_key_env = "GROQ_API_KEY"
-capabilities = ["streaming", "tools"]
+capabilities = ["streaming", "tools", "structured_output"]
+incompatible_capability_combinations = [
+  ["structured_output", "streaming"],
+  ["structured_output", "tools"],
+]
 
 [logical_models."free-frontier"]
 routes = ["gemini-flash", "groq-gpt-oss"]
@@ -175,6 +197,12 @@ List logical models:
 
 ```bash
 curl -s http://127.0.0.1:4000/v1/models | python -m json.tool
+```
+
+Retrieve one logical model:
+
+```bash
+curl -s http://127.0.0.1:4000/v1/models/free-frontier | python -m json.tool
 ```
 
 Non-streaming completion:

@@ -12,10 +12,12 @@
 ## Core behavior
 
 - [ ] `GET /v1/models` exposes `free-frontier`
+- [ ] `GET /v1/models/free-frontier` returns model metadata
 - [ ] non-streaming completion works
 - [ ] streaming ends with `[DONE]`
 - [ ] tool/function call works
 - [ ] capability-incompatible route is skipped before inference
+- [ ] incompatible capability combinations are skipped before inference
 - [ ] fallback and cooldown work
 - [ ] pre-stream fallback works
 - [ ] paid/ineligible routes are never selected
@@ -25,7 +27,10 @@
 - [ ] `/health` reports readiness
 - [ ] `/status` reports request/fallback state
 - [ ] `/routes` explains route eligibility and recent fallback state
+- [ ] responses include `X-Request-ID` and routing logs carry the same ID
+- [ ] final all-routes `503` includes `Retry-After` when cooldown timing is known
 - [ ] observability output exposes no credential values or credential environment-variable names
+- [ ] known removable top-level provider diagnostics are normalized without breaking tool/reasoning compatibility metadata
 
 ## Real consumers
 

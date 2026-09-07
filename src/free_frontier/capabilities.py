@@ -58,3 +58,14 @@ def _messages_include_images(messages: Any) -> bool:
             if part.get("type") in {"image_url", "input_image", "image"}:
                 return True
     return False
+
+
+def incompatible_capability_combinations(
+    configured: tuple[frozenset[Capability], ...],
+    required: frozenset[Capability],
+) -> tuple[frozenset[Capability], ...]:
+    """Return declared route restrictions triggered by the request."""
+
+    return tuple(
+        combination for combination in configured if combination.issubset(required)
+    )

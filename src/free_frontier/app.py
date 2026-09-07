@@ -4,8 +4,9 @@ import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,17 +40,23 @@ def _error(
     error_type: str,
     code: str,
     param: str | None = None,
+    retry_after_seconds: int | None = None,
 ) -> JSONResponse:
+    error: dict[str, Any] = {
+        "message": message,
+        "type": error_type,
+        "param": param,
+        "code": code,
+    }
+    headers: dict[str, str] = {}
+    if retry_after_seconds is not None:
+        error["retry_after_seconds"] = retry_after_seconds
+        headers["Retry-After"] = str(retry_after_seconds)
+
     return JSONResponse(
         status_code=status_code,
-        content={
-            "error": {
-                "message": message,
-                "type": error_type,
-                "param": param,
-                "code": code,
-            }
-        },
+        content={"error": error},
+        headers=headers,
     )
 
 
@@ -90,6 +97,22 @@ def create_app(
     app.state.router = router
     app.state.observability = resolved_observability
 
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request_id = uuid4().hex[:12]
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    def model_row(model_id: str, *, created: int | None = None) -> dict[str, Any]:
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": created if created is not None else int(time.time()),
+            "owned_by": "free-frontier",
+        }
+
     def route_rows() -> list[dict[str, Any]]:
         logical = resolved_config.logical_models["free-frontier"]
         rows: list[dict[str, Any]] = []
@@ -110,6 +133,10 @@ def create_app(
                     "capabilities": sorted(
                         capability.value for capability in route.capabilities
                     ),
+                    "incompatible_capability_combinations": [
+                        sorted(capability.value for capability in combination)
+                        for combination in route.incompatible_capability_combinations
+                    ],
                     "eligible_now": eligible_now,
                     "cooldown": {
                         "active": remaining > 0,
@@ -171,28 +198,38 @@ def create_app(
         now = int(time.time())
         return {
             "object": "list",
-            "data": [
-                {
-                    "id": model_id,
-                    "object": "model",
-                    "created": now,
-                    "owned_by": "free-frontier",
-                }
-                for model_id in router.logical_models()
-            ],
+            "data": [model_row(model_id, created=now) for model_id in router.logical_models()],
         }
+
+    @app.get("/v1/models/{model_id}", response_model=None)
+    async def retrieve_model(model_id: str) -> dict[str, Any] | JSONResponse:
+        if model_id not in router.logical_models():
+            return _error(
+                404,
+                f"Unknown model '{model_id}'. Use a logical model returned by /v1/models.",
+                error_type="invalid_request_error",
+                code="model_not_found",
+                param="model",
+            )
+        return model_row(model_id)
 
     @app.post("/v1/chat/completions", response_model=None)
     async def chat_completions(
         request: ChatCompletionRequest,
+        http_request: Request,
     ) -> dict[str, Any] | JSONResponse | StreamingResponse:
         payload = request.model_dump(exclude={"model"}, exclude_none=True)
         payload["stream"] = request.stream
+        request_id = http_request.state.request_id
         resolved_observability.record_request_started(streaming=request.stream)
 
         try:
             if request.stream:
-                chunks = await router.stream(request.model, payload)
+                chunks = await router.stream(
+                    request.model,
+                    payload,
+                    request_id=request_id,
+                )
                 return StreamingResponse(
                     _sse_events(chunks, resolved_observability),
                     media_type="text/event-stream",
@@ -202,7 +239,11 @@ def create_app(
                     },
                 )
 
-            response = await router.complete(request.model, payload)
+            response = await router.complete(
+                request.model,
+                payload,
+                request_id=request_id,
+            )
             resolved_observability.record_request_succeeded()
             return response
         except UnknownLogicalModel:
@@ -223,13 +264,14 @@ def create_app(
                 error_type="invalid_request_error",
                 code="unsupported_capabilities",
             )
-        except AllRoutesUnavailable:
+        except AllRoutesUnavailable as exc:
             resolved_observability.record_request_failed("all_routes_unavailable")
             return _error(
                 503,
                 "All eligible free routes are temporarily unavailable.",
                 error_type="api_error",
                 code="all_routes_unavailable",
+                retry_after_seconds=exc.retry_after_seconds,
             )
         except TransportError:
             resolved_observability.record_request_failed("upstream_error")
