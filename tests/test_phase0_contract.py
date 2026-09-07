@@ -28,3 +28,15 @@ def test_agent_instructions_preserve_product_boundary() -> None:
     assert "Free Frontier is **not** an agent framework" in agents
     assert "v0.1 is free-only" in agents
     assert "Monitoring data belongs in the core" in agents
+
+def test_architecture_constitution_is_wired_into_project_instructions() -> None:
+    constitution = (ROOT / "docs" / "CONSTITUTION.md").read_text(encoding="utf-8")
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Boring is a feature" in constitution
+    assert "No speculative infrastructure" in constitution
+    assert "Persistence is earned, not assumed" in constitution
+    assert "Presentation stays outside the core" in constitution
+    assert "docs/CONSTITUTION.md" in agents
+    assert "docs/CONSTITUTION.md" in readme

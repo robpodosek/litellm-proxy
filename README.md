@@ -16,6 +16,20 @@ Model:    free-frontier
 Hermes, Cline, Continue, Open WebUI, custom applications, and other OpenAI-compatible clients
 sit above Free Frontier. They do not need to select the physical provider/model themselves.
 
+## Project constitution
+
+Free Frontier follows a deliberately strict architectural rule: **keep the core small, boring,
+and focused on one job.** Install FrFr, add provider keys, point a client at it, and forget it
+exists.
+
+No speculative infrastructure belongs in the default runtime. Databases, sidecars, queues, UI
+stacks, plugin systems, and new abstractions must solve a concrete current problem and beat a
+simpler alternative before they are admitted. Monitoring data belongs in the core; dashboards,
+VS Code extensions, and other presentation layers belong in separate projects that consume the
+core APIs.
+
+See [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) for the durable architectural rules.
+
 ## What Free Frontier owns
 
 Free Frontier owns:

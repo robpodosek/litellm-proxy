@@ -13,12 +13,14 @@ Free Frontier is **not** an agent framework.
 
 Before changing implementation code, read in this order:
 
-1. `docs/SPEC-v0.1.md`
-2. `docs/ARCHITECTURE.md`
-3. `docs/ROADMAP.md`
-4. `README.md`
+1. `docs/CONSTITUTION.md`
+2. `docs/SPEC-v0.1.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/ROADMAP.md`
+5. `README.md`
 
-When documentation conflicts, `docs/SPEC-v0.1.md` is authoritative for v0.1 product behavior.
+`docs/CONSTITUTION.md` is authoritative for durable scope and architectural principles.
+`docs/SPEC-v0.1.md` is authoritative for v0.1 product behavior.
 
 ## Hard product boundary
 
@@ -43,6 +45,25 @@ The scope test is:
 > Does the proxy need this information or behavior to select and serve an LLM request?
 
 If the answer is no, it probably does not belong in the core project.
+
+## Architecture admission gate
+
+Do not add a runtime dependency, database, service, process, persistence layer, generalized
+abstraction, UI stack, or plugin system just because it may be useful later.
+
+Before proposing one, identify the concrete current problem, explain why the existing architecture
+cannot solve it cleanly, and show why the proposed solution is the smallest practical answer.
+Include the new failure modes and maintenance cost. Hypothetical future scale is not sufficient
+justification.
+
+Transient routing state stays in memory unless losing specific state across restart causes a
+demonstrated routing or user problem. SQLite is acceptable only after persistence earns its place;
+it is not a default architectural ingredient. External databases require an even stronger case.
+
+Presentation layers remain separate consumers of core APIs. Do not add frontend assets, Node,
+editor SDKs, or dashboard dependencies to the Free Frontier core.
+
+When uncertain, choose less infrastructure.
 
 ## v0.1 public contract
 
