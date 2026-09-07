@@ -206,13 +206,69 @@ filtering, and pre-stream fallback smoke tests. See
 [`docs/PHASE4-SMOKE.md`](docs/PHASE4-SMOKE.md) for status, cooldown, and fallback-observability
 smoke tests.
 
+## Real clients
+
+Phase 5 hardens the stable proxy contract against real consumers. The client-facing setup stays:
+
+```text
+Base URL: http://127.0.0.1:4000/v1
+Model:    free-frontier
+```
+
+Integration guides:
+
+- [`docs/integrations/HERMES.md`](docs/integrations/HERMES.md)
+- [`docs/integrations/CLINE.md`](docs/integrations/CLINE.md)
+
+Provider credentials remain in Free Frontier. A client that requires a non-empty API-key field
+for an OpenAI-compatible endpoint may use a non-secret local placeholder while Free Frontier is
+bound to loopback. Do not copy upstream provider keys into clients.
+
+## Docker
+
+Phase 5 restores container packaging around the new application entrypoint. Prepare `.env` and
+`free-frontier.toml` exactly as for local development, then run:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+The compose file publishes the proxy only on host loopback by default:
+
+```text
+127.0.0.1:4000 -> container:4000
+```
+
+Check it with:
+
+```bash
+curl -s http://127.0.0.1:4000/health | python -m json.tool
+docker compose ps
+```
+
+Stop it with:
+
+```bash
+docker compose down
+```
+
+`.env` and the local `free-frontier.toml` are runtime inputs and are excluded from the image
+build context. See [`docs/PHASE5-SMOKE.md`](docs/PHASE5-SMOKE.md) and
+[`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md).
+
+## Current provider notes
+
+The checked-in sample routes are documented in [`docs/PROVIDERS.md`](docs/PROVIDERS.md). Provider
+availability and free-tier terms can change, so re-check the upstream sources before releases.
+
 ## Development
 
 ```bash
 uv run pytest
 uv run ruff check .
 uv run python -m compileall src
-git diff --check
+git --no-pager diff --check
 ```
 
 The deterministic test suite uses fake transports and consumes no provider quota.

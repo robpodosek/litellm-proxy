@@ -11,7 +11,6 @@ def test_legacy_runtime_files_are_removed() -> None:
         "config.yaml",
         "stats.json",
         "proxy.log",
-        "Dockerfile",
         "docker-compose.yml",
     ):
         assert not (ROOT / relative_path).exists(), f"legacy Phase 0 file remains: {relative_path}"

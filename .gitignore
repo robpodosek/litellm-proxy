@@ -27,4 +27,5 @@ state/
 stats.json
 
 # Scratch
+*.bak
 scratch/

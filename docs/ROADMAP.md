@@ -2,7 +2,7 @@
 
 This roadmap turns the specification into narrow implementation phases. Do not start a later phase until the current phase's acceptance gate passes.
 
-Current implementation target: **Phase 4**. Phase 0 through Phase 3 acceptance gates have passed.
+Current implementation target: **Phase 5**. Phase 0 through Phase 4 acceptance gates have passed.
 
 ## Phase 0 — Reset and contract
 
@@ -162,20 +162,151 @@ Deliverables:
 - failure/error documentation
 - release checklist
 
+### Phase 5 hardening discovered during real Hermes integration
+
+Before calling v0.1 complete, incorporate the compatibility issues exposed by the first real Hermes run:
+
+- add a request/correlation ID to routing logs so concurrent client probes, retries, and inference calls can be traced as one request path
+- add `GET /v1/models/{model}` for OpenAI-compatible model-detail discovery
+- document harmless client backend-detection probes that Free Frontier intentionally does not implement
+- do not fake Ollama or unrelated backend endpoints such as `/api/tags` or `/api/show` merely to silence probe 404s
+- evolve route capabilities from independent yes/no flags into compatibility constraints for combinations such as structured output + streaming or structured output + tools
+- expose useful retry timing in terminal errors/final `503` responses when an upstream `Retry-After` or known cooldown is available
+- normalize/sanitize provider-specific response fields where practical so clients do not need to understand Gemini/Groq-specific metadata
+- expand the live fallback pool beyond two upstreams when current provider policies permit a verifiably zero-cost route
+- add deterministic tests that reproduce the real Hermes integration failure sequence: preferred route temporarily unavailable, fallback route rate-limited, routes cooling down, and client retries
+
 ### Acceptance gate
 
-At least two OpenAI-compatible consumer applications can be configured with the same Free Frontier base URL and `free-frontier` logical model, and simulated/controlled provider failure causes transparent fallback without client reconfiguration.
+At least two OpenAI-compatible consumer applications can be configured with the same Free Frontier base URL and `free-frontier` logical model, and simulated/controlled provider failure causes transparent fallback without client reconfiguration. Real-client logs must be traceable by request ID, and compatibility probing must not require pretending to implement unrelated provider APIs.
 
 ---
 
 # After v0.1
 
-Potential follow-on work:
+Post-v0.1 work should preserve the core rule: consumers see one stable OpenAI-compatible endpoint while provider selection, eligibility, cost policy, and fallback remain internal to Free Frontier.
 
-- small web dashboard
+## Provider expansion and qualification
+
+Evaluate every provider at implementation time. A credential or model enters the normal FrFr routing pool only when there is a verifiable free-tier or other zero-marginal-cost path with a hard boundary against accidental paid fallback.
+
+Candidate credentials already available for evaluation:
+
+- `ANTHROPIC_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `GEMINI_API_KEY`
+- `GITHUB_TOKEN`
+- `GOOGLE_API_KEY`
+- `GROK_API_KEY`
+- `GROQ_API_KEY`
+- `NVIDIA_NIM_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENROUTER_API_KEY`
+
+For each candidate, record:
+
+- whether a real free tier currently exists
+- whether the account can automatically spill into paid usage
+- whether Free Frontier can enforce a hard no-paid boundary
+- rate limits and cooldown semantics
+- supported context size and request capabilities
+- capability-combination restrictions
+- provider/model deprecation or availability risks
+
+Initial expansion targets include NVIDIA NIM, OpenRouter free routes, and other independently-backed providers that satisfy the zero-cost rule. Local Ollama models should also be supported as a zero-marginal-cost fallback option.
+
+`OPENAI_API_KEY` must not enter the normal free pool merely because the user also has ChatGPT Plus or promotional credits. API-key billing and subscription billing are separate concerns. Any future paid route mode must be explicit opt-in and must never become an automatic fallback from the free pool.
+
+## Subscription-backed OAuth routes
+
+Investigate zero-marginal-cost routes backed by subscriptions the user already pays for, beginning with OpenAI Codex/ChatGPT subscription OAuth.
+
+Requirements:
+
+- authenticate through a first-class Free Frontier integration rather than copying or borrowing another client's stored OAuth credentials
+- treat subscription usage limits separately from API-key billing
+- expose subscription route availability/cooldown through the same routing and observability abstractions
+- preserve the rule that a subscription-backed route cannot silently fall through to paid API usage
+
+This broadens the practical meaning of "free" in Free Frontier to inference with no additional per-request charge to the user.
+
+## Client compatibility
+
+Harden compatibility with real OpenAI-compatible consumers such as Hermes and Cline.
+
+Potential work:
+
+- maintain a documented compatibility matrix
+- support standard model-detail discovery such as `GET /v1/models/{model}`
+- record which harmless discovery probes clients perform
+- add request IDs/correlation IDs across HTTP requests, routing events, retries, and fallbacks
+- add regression tests based on real client behavior
+- avoid implementing fake compatibility endpoints that could misidentify Free Frontier as Ollama or another backend
+
+## Response normalization
+
+Reduce unnecessary leakage of provider-specific response details while preserving information required for OpenAI-compatible behavior.
+
+Potential work:
+
+- sanitize provider-specific metadata in streaming chunks
+- normalize usage fields where providers differ
+- preserve tool calls, structured output, and reasoning metadata only when needed by the client contract
+- make provider identity available through explicit observability/debug interfaces rather than accidental response fields
+
+## Capability policy evolution
+
+Replace simple capability sets with richer constraints where required.
+
+Examples:
+
+- supports streaming
+- supports tools
+- supports structured output
+- supports structured output only when not streaming
+- supports structured output only when tools are absent
+- supports vision or multimodal input
+- context-window requirements
+
+The router should reject incompatible capability combinations before consuming provider inference whenever the restriction is known.
+
+## Observability and user interfaces
+
+Build presentation layers as consumers of the existing headless status APIs. They must never become part of the routing critical path.
+
+Potential work:
+
+- small local web dashboard
 - VS Code extension
-- richer route analytics
-- additional logical routing profiles
-- provider discovery/validation helpers
+- CLI status/routes commands
+- richer route analytics and history
+- request/fallback timelines using correlation IDs
+- provider quota/cooldown visualization
 
-These should consume stable core interfaces instead of moving UI concerns into routing logic.
+## Routing intelligence
+
+Potential follow-on routing work:
+
+- additional logical routing profiles
+- latency-aware ordering within an eligible free pool
+- context-window-aware selection
+- capability-preference policies
+- provider health history
+- provider discovery/validation helpers
+- automated checks for model deprecation and free-tier policy drift
+
+None of these may weaken the hard cost boundary. A faster or smarter route is never worth silently spending money.
+
+## Branding and developer experience
+
+Keep **Free Frontier** as the formal project name and use **FrFr** as the shorthand/brand where it fits.
+
+Tagline:
+
+> **One endpoint. Free models. FrFr.**
+
+Potential future CLI naming can use `frfr` while the repository/package names remain `free-frontier` / `free_frontier` for compatibility.
+
+---
+
+All follow-on dashboards, extensions, CLIs, subscription integrations, and provider adapters should consume stable core interfaces instead of moving UI, client, or billing concerns into routing logic.

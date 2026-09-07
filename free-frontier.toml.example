@@ -1,4 +1,4 @@
-# Phase 4 example configuration.
+# v0.1 sample configuration (Phase 5 release candidate).
 #
 # Route order under logical_models."free-frontier" is preference order.
 # Only routes with enabled=true AND free=true are eligible for v0.1 routing.

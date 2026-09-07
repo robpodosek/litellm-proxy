@@ -220,3 +220,29 @@ Free Frontier ---+-> web dashboard
 ```
 
 The proxy must remain fully functional without any of them.
+
+## Phase 5 integration boundary
+
+Hermes, Cline, and other consumers remain outside the Free Frontier process:
+
+```text
+Hermes / Cline / other OpenAI-compatible client
+                  |
+                  v
+        http://127.0.0.1:4000/v1
+                  |
+                  v
+           Free Frontier core
+                  |
+                  v
+          free provider routes
+```
+
+Client-specific settings belong in integration documentation. The router must not acquire
+Hermes-specific task state, Cline-specific workflow state, or IDE behavior.
+
+Container packaging follows the same rule. Docker starts the normal `free-frontier` entrypoint;
+it does not introduce a second routing implementation. The process binds `0.0.0.0` inside the
+container only so Docker can forward traffic, while the checked-in compose file publishes port
+4000 on host `127.0.0.1` by default.
+

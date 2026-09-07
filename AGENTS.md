@@ -146,12 +146,16 @@ must consume status/observability interfaces rather than own routing decisions.
 
 ## Current phase
 
-Phase 0 through Phase 3 acceptance gates have passed.
+Phase 0 through Phase 4 acceptance gates have passed.
 
-Current implementation target: **Phase 4 - headless observability and status API.**
+Current implementation target: **Phase 5 - integration hardening and v0.1 release.**
 
-Do not build a dashboard, terminal UI, or VS Code extension in Phase 4. The core should expose
-safe read-only state that future presentation layers can consume.
+Phase 5 may add packaging, integration documentation, compatibility fixes, and release checks.
+Do not move Hermes/Cline workflow logic into Free Frontier. Client-specific setup belongs in
+documentation or compatibility boundaries, not in routing policy.
+
+Do not build the dashboard or VS Code extension in Phase 5. Those remain post-v0.1 consumers
+of the stable observability API.
 
 ## Testing requirements
 
@@ -167,16 +171,16 @@ git diff --check
 Tests should use fake transports whenever possible so normal test runs consume no provider
 quota.
 
-Phase 4 must prove at minimum:
+Phase 5 must prove at minimum:
 
-1. `/health` exposes small liveness/readiness state
-2. `/status` exposes aggregate request/fallback state
-3. `/routes` exposes safe per-route eligibility, cooldown, capability, and outcome state
-4. recent fallback behavior can be explained from read-only status data
-5. status reads do not alter request counters or routing decisions
-6. credential values and credential environment-variable names are not exposed
-7. streaming and non-streaming requests update metrics correctly
-8. all Phase 0 through Phase 3 routing behavior remains unchanged
+1. Hermes can use `http://127.0.0.1:4000/v1` + `free-frontier`
+2. Cline can use the same endpoint + logical model through OpenAI Compatible mode
+3. both consumers can complete tool-using workflows through Free Frontier
+4. controlled provider failure remains transparent to both consumers
+5. Docker packaging runs the same application entrypoint and binds host loopback by default
+6. provider examples are checked against current provider documentation
+7. failure behavior and release steps are documented
+8. all Phase 0 through Phase 4 behavior remains unchanged
 
 ## Code style
 
